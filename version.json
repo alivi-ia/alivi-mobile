@@ -1,1 +1,5 @@
-{"version":"2.5.1","channel":"piloto","notes":"Novo layout limpo e menu de atualizacao"}
+{
+  "version": "2.5.3",
+  "channel": "piloto",
+  "notes": "Mensagens VOCÊ e ALIVI com cores distintas, legibilidade melhorada; chat, voz e notas mantidos"
+}

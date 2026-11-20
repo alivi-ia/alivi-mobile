@@ -1,0 +1,11 @@
+ALIVI IA 2.5.3 — MELHORIA VISUAL DO CHAT
+
+Publique os ARQUIVOS de dentro de mobile/ na RAIZ do repositório alivi-ia/alivi-mobile (GitHub Pages).
+Depois de publicar, no Android: ALIVI > ⋮ > Atualizar ALIVI; feche e abra novamente se necessário.
+
+Mudanças: mensagens VOCÊ em cinza-azulado claro, alinhadas à direita, nome em vinho; mensagens ALIVI em branco-azulado, à esquerda, nome em azul. Letras com melhor contraste.
+
+Preservados: chaves de armazenamento local de notas e histórico, botão de atualização, menu, microfone, leitura em voz alta, opção de servidor HTTPS.
+
+IMPORTANTE: Sem servidor seguro, as respostas ainda são LOCAIS DE TESTE, não respostas do Gemini. Não envie chaves de API ao GitHub.
+Faça backup das notas e conversas importantes antes de alterações futuras.
