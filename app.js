@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='2.9.0',KEY='alivi-mobile-notes-v1';
+const VERSION='2.9.1',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
