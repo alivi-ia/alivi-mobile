@@ -1,0 +1,8 @@
+ALIVI MOBILE 3.2.0 — instalação
+1. Guarde o ZIP 3.1.0 e exporte o backup de agenda/notas nos aparelhos antes da atualização.
+2. Execute instalar_supabase_320.sql no SQL Editor do projeto ALIVI IA. Não é necessário alterar tabelas existentes.
+3. Envie SOMENTE app.js, index.html, sw.js e version.json ao repositório alivi-mobile (main). Não publique o SQL nem este arquivo.
+4. Atualize ALIVI e confira versão 3.2.0. Em Alertas e lembretes, clique Sincronizar agora. Verifique em um segundo aparelho com a mesma conta.
+5. Faça testes com dados fictícios e exclua-os antes de usar registros reais.
+Limites: sincronização por registro com exclusão lógica; alterações simultâneas no mesmo registro seguem a última gravação recebida. Agenda, caixa pessoal, caixa empresarial e estoque sincronizam; notas e organização de projetos permanecem locais. Alertas apenas com aplicativo aberto; sem push em segundo plano. Estoque em kg, caixa em BRL, não há contabilidade fiscal nem lançamento cruzado automático. Exportação de gestão JSON é cópia para consulta; não há restauração integrada desta cópia (backup de agenda anterior continua disponível). Backend 2.5 preservado.
+Validação: sintaxe JS e 13 verificações unitárias locais; SQL, RLS, sincronização real entre aparelhos e interface publicada ainda precisam de homologação.
