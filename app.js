@@ -1,11 +1,11 @@
 'use strict';
-const VERSION='3.10.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.1',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
 function render(){const target=$('notes');target.replaceChildren();if(!notes.length){const e=document.createElement('div');e.className='empty';e.textContent='Nenhuma nota ainda.';target.append(e)}notes.forEach((n,i)=>{const d=document.createElement('div');d.className='item';const b=document.createElement('b');b.textContent=n.title;const t=document.createElement('p');t.textContent=n.content;const s=document.createElement('small');s.textContent=n.date;const del=document.createElement('button');del.className='secondary';del.textContent='Excluir';del.onclick=()=>{if(confirm('Excluir esta nota?')){notes.splice(i,1);persist()}};d.append(b,t,s,del);target.append(d)})}
 function persist(){localStorage.setItem(KEY+':'+uid,JSON.stringify(notes));render()}
-function go(page){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts')renderAlerts()}
+function go(page){if(page!=='home'&&voiceModeOn)setVoiceMode(false);document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts')renderAlerts()}
 document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
 $('alert-badge').onclick=()=>go('alerts');
 $('dots').onclick=()=>{const m=$('menu');m.hidden=!m.hidden;$('dots').setAttribute('aria-expanded',String(!m.hidden))};document.addEventListener('click',e=>{if(!e.target.closest('.menu-wrap')){$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false')}});
@@ -211,25 +211,56 @@ function preferenceCandidate(q){const s=q.trim();if(s.length>250||s.includes('?'
 function suggestPreference(q,rows){if(!$('suggest-memory').checked)return;const candidate=preferenceCandidate(q);if(!candidate||rows.some(r=>canonical(r.memory_value)===canonical(candidate)))return;pendingSuggestion=candidate;$('suggestion-text').textContent='Deseja guardar esta preferência na memória? '+candidate;$('memory-suggestion').hidden=false}
 $('dismiss-memory').onclick=clearSuggestion;
 $('accept-memory').onclick=async()=>{if(!uid||!pendingSuggestion||busy)return;const g=generation,v=pendingSuggestion;busy=true;$('accept-memory').disabled=true;try{const status=await storeMemory(v,g);if(g===generation){$('memory-status').textContent=status;clearSuggestion()}}catch(e){if(g===generation)$('memory-status').textContent='Memória não salva: '+e.message}finally{busy=false;$('accept-memory').disabled=false}};
-// Modo Voz 3.10.0: interação por turnos e leitura por TTS; NÃO é streaming full duplex.
+// ALIVI 3.10.1: voz por turnos com retomada automática controlada, sem escuta durante TTS.
+// A escuta encerra ao mudar de aba, sair do modo, revogar permissão ou por comando de voz.
 let voiceModeOn=false,voiceRecognitionFailed=false,voiceFinalTranscript=false;
-function voiceStatus(text){$('voice-status').textContent=text;const info=$('voice-mode-explain');if(info&&voiceModeOn)info.textContent=text||'Toque em Falar para continuar a conversa.'}
+let voiceSession=0,voiceListening=false,voiceStarting=false,voiceRequested=false;
+let voiceResumeTimer=null,voiceResumeTries=0,voiceSilenceRetries=0,voiceRecognitionText='';
+const voiceStopPhrases=new Set([
+ 'encerrar','encerra','encerrar conversa','encerra conversa','encerrar a conversa',
+ 'finalizar conversa','finaliza conversa','terminar conversa','termina conversa',
+ 'desligar modo voz','desliga modo voz','desligar o modo voz',
+ 'encerrar modo voz','encerra modo voz','parar de ouvir','pare de ouvir',
+ 'pode encerrar','pode encerrar a conversa','tchau','ate mais','fim da conversa',
+ 'parar conversa','parar a conversa','parar modo voz'
+]);
+function voiceNormalize(text){return String(text||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[.,!?;:]/g,' ').replace(/\s+/g,' ').trim()}
+function isVoiceStop(text){const s=voiceNormalize(text).replace(/^(?:ei |oi |ola )?alivi(?: |$)/,'').replace(/ por favor$/,'').replace(/ agora$/,'').trim();return voiceStopPhrases.has(s)}
+function voiceStatus(text){$('voice-status').textContent=text;const info=$('voice-mode-explain');if(info)info.textContent=text||'Pronta para ouvir.'}
+function voiceShowResume(visible){$('voice-talk').hidden=!visible}
+function voiceShowStop(visible){$('voice-stop').hidden=!visible}
+function clearVoiceTimer(){if(voiceResumeTimer!==null){clearTimeout(voiceResumeTimer);voiceResumeTimer=null}}
+function voiceAbortRecognition(){voiceRequested=false;voiceRecognitionText='';voiceFinalTranscript=false;if(rec){try{rec.abort()}catch{}}}
+function voicePause(message){clearVoiceTimer();voiceShowResume(true);voiceStatus(message||'Toque em Retomar para continuar.');}
 function setVoiceMode(enabled){
- voiceModeOn=!!enabled;
- $('speak').checked=voiceModeOn;
- $('voice-mode-panel').hidden=!voiceModeOn;
- $('main-app').classList.toggle('voice-mode-on',voiceModeOn);
- $('voice-mode-toggle').setAttribute('aria-pressed',String(voiceModeOn));
- $('voice-mode-toggle').textContent=voiceModeOn?'✦ Voz ativa':'✧ Voz';
- $('voice-mode-toggle').title=voiceModeOn?'Encerrar conversa por voz':'Ativar conversa por voz';
- if(!voiceModeOn){voiceRecognitionFailed=true;try{rec?.abort()}catch{}stopAudio();$('voice-status').textContent='';}
- else{voiceStatus('Modo Voz ligado. Toque em Falar agora, diga sua mensagem e a ALIVI responderá em voz.');}
+ const next=!!enabled;voiceSession++;clearVoiceTimer();voiceResumeTries=0;voiceSilenceRetries=0;
+ voiceModeOn=next;voiceShowStop(false);$('speak').checked=next;$('voice-mode-panel').hidden=!next;
+ $('main-app').classList.toggle('voice-mode-on',next);
+ $('voice-mode-toggle').setAttribute('aria-pressed',String(next));
+ $('voice-mode-toggle').textContent=next?'✕ Encerrar voz':'✧ Voz';
+ $('voice-mode-toggle').title=next?'Encerrar conversa por voz':'Ativar conversa por voz';
+ if(!next){voiceRecognitionFailed=true;voiceAbortRecognition();stopAudio();$('voice-status').textContent='';$('voice-mode-explain').textContent='Pronta para ouvir.';voiceShowResume(false);}
+ else{voiceRecognitionFailed=false;voiceShowResume(false);voiceStatus('Ativando microfone...');if(!rec){voicePause('Reconhecimento de voz não disponível neste navegador.');return}startSpeechInput(true)}
 }
 $('voice-mode-toggle').addEventListener('click',()=>setVoiceMode(!voiceModeOn));
 $('voice-exit').addEventListener('click',()=>setVoiceMode(false));
-$('voice-talk').addEventListener('click',()=>startSpeechInput());
-$('voice-replay').addEventListener('click',()=>{if(lastReply)say(lastReply,true);else voiceStatus('Ainda não há resposta nesta conversa para repetir.')});
-$('voice-stop').addEventListener('click',()=>{stopAudio();voiceStatus('Áudio interrompido. Toque em Falar ou Repetir resposta.');});
+$('voice-talk').addEventListener('click',()=>{voiceSilenceRetries=0;startSpeechInput(true)});
+$('voice-replay').addEventListener('click',()=>{if(!lastReply){voiceStatus('Ainda não há resposta para repetir.');return}clearVoiceTimer();voiceAbortRecognition();void say(lastReply,true)});
+$('voice-stop').addEventListener('click',()=>{voiceShowStop(false);stopAudio();if(voiceModeOn){voiceStatus('Resposta interrompida. Retomando microfone...');scheduleVoiceResume(500)}else voiceStatus('Áudio interrompido.')});
+// Não usa microfone indefinidamente: um reinício por turno e até duas tentativas de silêncio.
+function scheduleVoiceResume(delay=550){
+ if(!voiceModeOn||!uid||!rec||document.hidden)return;
+ clearVoiceTimer();const mySession=voiceSession;voiceShowResume(false);
+ voiceResumeTimer=setTimeout(()=>{
+  voiceResumeTimer=null;
+  if(!voiceModeOn||voiceSession!==mySession||document.hidden||!uid)return;
+  if(busy||syncing||voiceLoading||(audio&&!audio.paused)||voiceListening||voiceStarting){
+   if(++voiceResumeTries<25){scheduleVoiceResume(600)}else voicePause('Toque em Retomar para continuar a conversa.');return;
+  }
+  voiceResumeTries=0;startSpeechInput(true);
+ },delay);
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&voiceModeOn)setVoiceMode(false)});
 function chatRender(force=true){const target=$('chat-log');const oldTop=target.scrollTop,nearBottom=target.scrollHeight-target.clientHeight-oldTop<70;const visible=visibleMessages();target.replaceChildren();visible.slice(-100).forEach(m=>{const d=document.createElement('div');d.className='bubble '+(m.role==='user'?'user':'alivi');const name=document.createElement('small');name.textContent=m.role==='user'?'VOCÊ':'ALIVI';d.append(name,document.createTextNode(m.text));target.append(d)});document.querySelector('.welcome').hidden=visible.length>0;if(force||nearBottom)scrollLatest();else target.scrollTop=oldTop}
 function chatSave(force=true){try{localStorage.setItem(CHATKEY+':'+uid,JSON.stringify(messages.slice(-100)))}catch(e){$('chat-notice').textContent='Não foi possível salvar histórico: '+e.message}chatRender(force);renderDesktopSidebar()}
 let audio=null,objectUrl=null,playbackEpoch=0;
@@ -247,7 +278,32 @@ async function login(signup){const email=$('email').value.trim(),password=$('pas
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
 async function restore(){sessionStorage.removeItem(TOKENKEY);if(location.hash.includes('access_token=')||location.hash.includes('error='))history.replaceState(null,'',location.pathname+location.search);try{session=JSON.parse(localStorage.getItem(SESSION)||'null');if(session)await enter();else $('auth-status').textContent='Entre na sua conta.'}catch(e){$('auth-status').textContent='Não foi possível restaurar a sessão: '+e.message}}
 let readyText='',voiceLoading=false;
-async function say(text,manual=false){if(manual&&audio&&readyText===text){try{await audio.play();voiceStatus('🔊 ALIVI falando...')}catch(e){$('voice-status').textContent=e.message}return}if((!manual&&!$('speak').checked)||voiceLoading)return;voiceLoading=true;const g=generation;try{const token=await getToken();if(!token)return;stopAudio();const requestEpoch=playbackEpoch;voiceStatus('🔊 Preparando resposta em voz...');const response=await fetch(getBase()+'/speech',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({text:text.slice(0,3000)})});if(!response.ok)throw Error('HTTP '+response.status);const blob=await response.blob();if(g!==generation||requestEpoch!==playbackEpoch||(!manual&&!voiceModeOn))return;objectUrl=URL.createObjectURL(blob);audio=new Audio(objectUrl);readyText=text;audio.onended=()=>{voiceStatus(voiceModeOn?'Pronta para ouvir você. Toque em Falar agora.':'')};audio.onerror=()=>{voiceStatus('Não foi possível reproduzir o áudio.')};try{await audio.play();voiceStatus('🔊 ALIVI falando...')}catch{voiceStatus('Áudio pronto. Toque em Repetir resposta no painel de voz.')}}catch(e){voiceStatus('Voz indisponível: '+e.message)}finally{voiceLoading=false}}
+async function say(text,manual=false){
+ if(!manual&&(!voiceModeOn||!$('speak').checked))return;
+ if(voiceLoading)return;
+ const g=generation,turn=voiceSession;
+ if(voiceModeOn){clearVoiceTimer();voiceAbortRecognition();voiceShowResume(false)}
+ if(manual&&audio&&readyText===text){
+  try{audio.currentTime=0;await audio.play();voiceShowStop(true);voiceStatus('🔊 ALIVI falando...')}
+  catch{voicePause('Áudio bloqueado. Toque em Repetir para ouvir ou Retomar para continuar.')}return;
+ }
+ voiceLoading=true;
+ try{
+  const token=await getToken();if(!token)throw Error('Sessão indisponível');
+  stopAudio();const epoch=playbackEpoch;
+  voiceStatus('🔊 Preparando resposta...');
+  const r=await fetch(getBase()+'/speech',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({text:text.slice(0,3000)})});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const blob=await r.blob();
+  if(g!==generation||epoch!==playbackEpoch||(voiceModeOn&&turn!==voiceSession)||(!manual&&!voiceModeOn))return;
+  objectUrl=URL.createObjectURL(blob);audio=new Audio(objectUrl);readyText=text;
+  audio.onended=()=>{voiceShowStop(false);if(voiceModeOn&&turn===voiceSession){voiceStatus('🎙 Sua vez. Ouvindo...');scheduleVoiceResume(450)}else voiceStatus('')};
+  audio.onerror=()=>{voiceShowStop(false);if(voiceModeOn)voicePause('Falha no áudio. Toque em Retomar para continuar.')};
+  try{await audio.play();voiceShowStop(true);voiceStatus('🔊 ALIVI falando...')}
+  catch{voiceShowStop(false);voicePause('Reprodução bloqueada pelo navegador. Toque em Repetir ou Retomar.')}
+ }catch(e){if(voiceModeOn&&turn===voiceSession)voicePause('Não foi possível reproduzir a resposta. Toque em Retomar.');else voiceStatus('Voz indisponível: '+e.message)}
+ finally{voiceLoading=false}
+}
 function localReply(q){const t=q.toLowerCase();if(t.includes('nota'))return 'Suas notas estão na aba Notas. Você tem '+notes.length+' nota(s) salva(s) neste aparelho.';return 'Para conversar com a ALIVI, configure seu token em Ajustes → Chat e voz.'}
 let lastReply='';
 // Memory operations: scope every request to the authenticated account.
@@ -277,22 +333,51 @@ if(fact){try{memoryStatus=await storeMemory(fact,g);memory=await readMemories(10
 else if(!directReply&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q)){const rows=await readMemories(10000);directReply=rows.length?'Memórias salvas ('+rows.length+'):\n'+rows.map((r,i)=>(i+1)+'. '+r.memory_value).join('\n'):'Nenhuma memória salva.';}
 if(g!==generation)return;$('memory-status').textContent=memoryStatus;
 const uniqueMemory=contextualMemories(memory,q,history);
-let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation)$('chat-notice').textContent='Falha: '+e.message}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat()}}
+let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation){$('chat-notice').textContent='Falha: '+e.message;if(voiceModeOn)voicePause('Falha na resposta. Toque em Retomar para tentar de novo.')}}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat()}}
 $('send').onclick=sendChat;$('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
 if(Recognition){
  rec=new Recognition();rec.lang='pt-BR';rec.interimResults=true;rec.continuous=false;
- rec.onstart=()=>{voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceStatus('🎙 Ouvindo... fale sua mensagem.');$('mic').disabled=true;$('voice-talk').disabled=true};
- rec.onresult=e=>{let words='',hasFinal=false;for(let i=0;i<e.results.length;i++){words+=e.results[i][0].transcript;if(e.results[i].isFinal)hasFinal=true;}$('message').value=words;voiceFinalTranscript=voiceFinalTranscript||hasFinal};
- rec.onerror=e=>{voiceRecognitionFailed=true;voiceStatus(({'not-allowed':'Permita o microfone nas configurações do navegador.','no-speech':'Não ouvi fala. Tente novamente.','network':'Reconhecimento indisponível na rede.'})[e.error]||'Microfone: '+e.error)};
- rec.onend=()=>{$('mic').disabled=false;$('voice-talk').disabled=false;if(!voiceRecognitionFailed&&voiceModeOn&&voiceFinalTranscript&&$('message').value.trim()&&!busy&&!syncing){voiceStatus('Mensagem ouvida. Enviando...');void sendChat()}else if(!voiceRecognitionFailed){voiceStatus(voiceModeOn?'Pronta para ouvir você. Toque em Falar novamente.':'Ditado concluído. Confira e envie a mensagem.')}};
+ rec.onstart=()=>{voiceStarting=false;voiceListening=true;voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceRecognitionText='';voiceStatus('🎙 Ouvindo... Pode falar.');voiceShowResume(false);$('mic').disabled=true;$('voice-talk').disabled=true};
+ rec.onresult=e=>{
+  let partial='',final='';
+  for(let i=0;i<e.results.length;i++){const part=e.results[i][0]?.transcript||'';partial+=part+' ';if(e.results[i].isFinal)final+=part+' '}
+  $('message').value=partial.trim();if(final.trim()){voiceRecognitionText=final.trim();voiceFinalTranscript=true}
+ };
+ rec.onerror=e=>{
+  voiceRecognitionFailed=true;voiceStarting=false;
+  const problem=({'not-allowed':'Permita o microfone nas configurações do navegador.','service-not-allowed':'Reconhecimento bloqueado pelo navegador.','audio-capture':'Microfone indisponível.','no-speech':'Não ouvi sua fala.','network':'Reconhecimento indisponível na rede.','aborted':'Escuta interrompida.'})[e.error]||'Microfone: '+e.error;
+  if(voiceModeOn&&e.error==='no-speech'){voiceSilenceRetries++;if(voiceSilenceRetries<=2)voiceStatus('Não ouvi sua fala. Tentarei ouvir novamente...');else voicePause('Não ouvi sua fala. Toque em Retomar quando quiser continuar.')}
+  else if(voiceModeOn&&e.error!=='aborted')voicePause(problem+' Toque em Retomar.');
+  else if(!voiceModeOn&&e.error!=='aborted')voiceStatus(problem);
+ };
+ rec.onend=()=>{
+  voiceListening=false;voiceStarting=false;$('mic').disabled=false;$('voice-talk').disabled=false;
+  const shouldProcess=voiceRequested;voiceRequested=false;
+  if(!shouldProcess)return;
+  const spoken=(voiceRecognitionText||$('message').value).trim();
+  if(voiceModeOn&&voiceFinalTranscript&&spoken){
+   if(isVoiceStop(spoken)){$('message').value='';setVoiceMode(false);$('chat-notice').textContent='Conversa por voz encerrada.';return}
+   voiceSilenceRetries=0;voiceStatus('Mensagem recebida. ALIVI pensando...');
+   if(!busy&&!syncing)void sendChat();else voicePause('Ainda estou processando a mensagem. Toque em Retomar.');
+  }else if(voiceModeOn&&voiceRecognitionFailed&&voiceSilenceRetries<=2){
+   // Somente silêncio permite retomar automaticamente; outros erros exigem toque.
+   if(!spoken&&voiceSilenceRetries>0&&voiceSilenceRetries<=2){voiceRecognitionFailed=false;voiceStatus('🎙 Tentando ouvir novamente...');scheduleVoiceResume(800)}
+  }else if(voiceModeOn&&!voiceRecognitionFailed){voicePause('Não consegui compreender. Toque em Retomar para falar novamente.')}
+  else if(!voiceModeOn&&!voiceRecognitionFailed)voiceStatus('Ditado concluído. Confira e envie a mensagem.');
+ };
 }else $('mic').title='Reconhecimento de voz indisponível neste navegador';
-function startSpeechInput(){
+function startSpeechInput(automatic=false){
  if(!rec){voiceStatus('Este navegador não oferece reconhecimento de fala. Use o teclado.');return}
- if(busy||syncing){voiceStatus('Aguarde o fim da resposta anterior.');return}
- stopAudio();try{rec.start()}catch(e){voiceStatus('Microfone: '+e.message)}
+ if(voiceStarting||voiceListening)return;
+ if(busy||syncing||voiceLoading){if(voiceModeOn)voicePause('Ainda estou respondendo. Toque em Retomar em instantes.');return}
+ if(automatic&&(!voiceModeOn||document.hidden))return;
+ clearVoiceTimer();stopAudio();voiceShowResume(false);
+ voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceRecognitionText='';voiceRequested=true;voiceStarting=true;
+ $('message').value='';
+ try{rec.start()}catch(e){voiceStarting=false;voiceRequested=false;voicePause('Microfone não iniciou. Toque em Retomar: '+e.message)}
 }
-$('mic').onclick=startSpeechInput;
+$('mic').onclick=()=>startSpeechInput(false);
 $('repeat-voice').onclick=()=>{if(lastReply)say(lastReply,true);else voiceStatus('Ainda não há resposta para reproduzir.')};
 $('attach').onclick=()=>{$('chat-notice').textContent='Anexos ainda não estão disponíveis nesta versão.'};
 $('clear-token').onclick=async()=>{const t=session?.access_token;try{await unregisterRemotePush()}catch{}lock();if(t)try{await fetch(SB+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+t}})}catch{}};
