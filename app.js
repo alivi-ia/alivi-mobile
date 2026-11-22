@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.9.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.9.1',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -102,7 +102,7 @@ if($('desktop-sidebar')){
 }
 
 
-// 3.9.0: Personalização local de tema, sem modificar contas, histórico ou notificações.
+// 3.9.1: Personalização local de tema, sem modificar contas, histórico ou notificações.
 const ALIVI_THEME_KEY='alivi-appearance-theme-v1';
 let themeChoice='dark';
 try{const saved=localStorage.getItem(ALIVI_THEME_KEY);if(['dark','light','auto'].includes(saved))themeChoice=saved}catch{}
@@ -110,10 +110,10 @@ const scheme=window.matchMedia?.('(prefers-color-scheme: dark)');
 function applyAliviTheme(){
  const effective=themeChoice==='auto'?(scheme?.matches?'dark':'light'):themeChoice;
  document.documentElement.dataset.aliviTheme=effective;
- const color=effective==='light'?'#b9d9ef':'#0d1c30';
+ const color=effective==='light'?'#c3dbea':'#1b3955';
  const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',color);
  document.querySelectorAll('[data-alivi-theme-choice]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.aliviThemeChoice===themeChoice)));
- const status=$('theme-status');if(status)status.textContent='Tema '+(themeChoice==='dark'?'Azul Noturno':themeChoice==='light'?'Azul Aurora':'Automático')+' selecionado neste dispositivo.';
+ const status=$('theme-status');if(status)status.textContent='Tema '+(themeChoice==='dark'?'Azul Orbital':themeChoice==='light'?'Azul Cristal':'Automático')+' selecionado neste dispositivo.';
 }
 document.querySelectorAll('[data-alivi-theme-choice]').forEach(btn=>btn.addEventListener('click',()=>{
  themeChoice=btn.dataset.aliviThemeChoice;
@@ -123,7 +123,7 @@ document.querySelectorAll('[data-alivi-theme-choice]').forEach(btn=>btn.addEvent
 if(scheme){if(scheme.addEventListener)scheme.addEventListener('change',()=>{if(themeChoice==='auto')applyAliviTheme()});else if(scheme.addListener)scheme.addListener(()=>{if(themeChoice==='auto')applyAliviTheme()})}
 applyAliviTheme();
 
-// 3.9.0: Mobile reutiliza a MESMA lista de conversas e o mesmo criador do desktop.
+// 3.9.1: Mobile reutiliza a MESMA lista de conversas e o mesmo criador do desktop.
 function mobileDrawerOpen(){return $('main-app').classList.contains('mobile-drawer-open')}
 function closeMobileDrawer(){
  const host=$('main-app');if(!host||!host.classList.contains('mobile-drawer-open'))return;
