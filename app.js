@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.8.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.9.0',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -35,7 +35,7 @@ function openDesktopConversation(id){
  activeProject=id;
  saveProjects();
  lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';
- clearSuggestion();chatRender(true);go('home');
+ clearSuggestion();chatRender(true);go('home');closeMobileDrawer();
  $('message').focus();
 }
 function renderDesktopSidebar(){
@@ -78,7 +78,7 @@ function startDesktopChat(){
  const now=new Date().toISOString();
  const chat={id:crypto.randomUUID(),name:`Nova conversa ${n}`,kind:'chat',autoTitle:true,created_at:now,pinned:false};
  projects.push(chat);activeProject=chat.id;lastReply='';clearSuggestion();
- saveProjects();renderProjects();chatRender(true);go('home');$('message').value='';$('message').focus();
+ saveProjects();renderProjects();chatRender(true);go('home');closeMobileDrawer();$('message').value='';$('message').focus();
 }
 function maybeTitleNewChat(project,q){
  const p=projects.find(p=>p.id===project&&p.kind==='chat'&&p.autoTitle);
@@ -99,6 +99,55 @@ if($('desktop-sidebar')){
  $('desktop-sidebar-toggle').setAttribute('aria-expanded',String(localStorage.getItem(DESKTOP_LAYOUT_KEY)!=='yes'));
  if(localStorage.getItem(DESKTOP_LAYOUT_KEY)==='yes')$('main-app').classList.add('desktop-sidebar-collapsed');
  $('desktop-rail-more').addEventListener('click',()=>{$('dots').click()});
+}
+
+
+// 3.9.0: Personalização local de tema, sem modificar contas, histórico ou notificações.
+const ALIVI_THEME_KEY='alivi-appearance-theme-v1';
+let themeChoice='dark';
+try{const saved=localStorage.getItem(ALIVI_THEME_KEY);if(['dark','light','auto'].includes(saved))themeChoice=saved}catch{}
+const scheme=window.matchMedia?.('(prefers-color-scheme: dark)');
+function applyAliviTheme(){
+ const effective=themeChoice==='auto'?(scheme?.matches?'dark':'light'):themeChoice;
+ document.documentElement.dataset.aliviTheme=effective;
+ const color=effective==='light'?'#b9d9ef':'#0d1c30';
+ const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',color);
+ document.querySelectorAll('[data-alivi-theme-choice]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.aliviThemeChoice===themeChoice)));
+ const status=$('theme-status');if(status)status.textContent='Tema '+(themeChoice==='dark'?'Azul Noturno':themeChoice==='light'?'Azul Aurora':'Automático')+' selecionado neste dispositivo.';
+}
+document.querySelectorAll('[data-alivi-theme-choice]').forEach(btn=>btn.addEventListener('click',()=>{
+ themeChoice=btn.dataset.aliviThemeChoice;
+ try{localStorage.setItem(ALIVI_THEME_KEY,themeChoice)}catch{}
+ applyAliviTheme();
+}));
+if(scheme){if(scheme.addEventListener)scheme.addEventListener('change',()=>{if(themeChoice==='auto')applyAliviTheme()});else if(scheme.addListener)scheme.addListener(()=>{if(themeChoice==='auto')applyAliviTheme()})}
+applyAliviTheme();
+
+// 3.9.0: Mobile reutiliza a MESMA lista de conversas e o mesmo criador do desktop.
+function mobileDrawerOpen(){return $('main-app').classList.contains('mobile-drawer-open')}
+function closeMobileDrawer(){
+ const host=$('main-app');if(!host||!host.classList.contains('mobile-drawer-open'))return;
+ host.classList.remove('mobile-drawer-open');
+ $('mobile-chat-menu').setAttribute('aria-expanded','false');
+ if(window.innerWidth<1000)$('desktop-sidebar').setAttribute('aria-hidden','true');
+}
+function toggleMobileDrawer(){
+ if(window.innerWidth>=1000)return;
+ const opened=!mobileDrawerOpen();
+ $('main-app').classList.toggle('mobile-drawer-open',opened);
+ $('mobile-chat-menu').setAttribute('aria-expanded',String(opened));
+ $('desktop-sidebar').setAttribute('aria-hidden',String(!opened));
+ if(opened){renderDesktopSidebar();$('desktop-search').focus()}
+}
+if($('mobile-chat-menu')){
+ $('mobile-chat-menu').addEventListener('click',toggleMobileDrawer);
+ $('mobile-drawer-overlay').addEventListener('click',closeMobileDrawer);
+ $('mobile-drawer-close').addEventListener('click',closeMobileDrawer);
+ $('mobile-new-chat').addEventListener('click',()=>{startDesktopChat();closeMobileDrawer()});
+ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMobileDrawer()});
+ document.querySelectorAll('#main-app>.nav [data-go]').forEach(b=>b.addEventListener('click',closeMobileDrawer));
+ window.addEventListener('resize',()=>{if(window.innerWidth>=1000){closeMobileDrawer();$('desktop-sidebar').removeAttribute('aria-hidden')}else if(!mobileDrawerOpen())$('desktop-sidebar').setAttribute('aria-hidden','true')});
+ if(window.innerWidth<1000)$('desktop-sidebar').setAttribute('aria-hidden','true');
 }
 
 function scrollLatest(){const t=$('chat-log');t.scrollTop=t.scrollHeight;requestAnimationFrame(()=>{if($('page-home').classList.contains('active'))t.scrollTop=t.scrollHeight})}

@@ -1,5 +1,5 @@
-const CACHE='alivi-mobile-v3.8.0';
-const FILES=['./','./index.html','./app.js','./app.js?v=3.8.0','./icon.svg','./manifest.webmanifest','./version.json'];
+const CACHE='alivi-mobile-v3.9.0';
+const FILES=['./','./index.html','./app.js','./app.js?v=3.9.0','./icon.svg','./manifest.webmanifest','./version.json'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('alivi-mobile-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',e=>{if(e.data?.type==='SKIP_WAITING')self.skipWaiting()});
