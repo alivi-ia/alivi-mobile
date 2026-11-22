@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.7.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.8.0',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -20,11 +20,87 @@ const PROJECTKEY='alivi-mobile-projects-v1';
 let projects=[], associations=Object.create(null), activeProject='', pendingSuggestion='';
 function projectStorage(){return PROJECTKEY+':'+uid}
 function loadProjects(){projects=[];associations=Object.create(null);activeProject='';try{const v=JSON.parse(localStorage.getItem(projectStorage())||'{}');if(Array.isArray(v.projects))projects=v.projects.filter(p=>typeof p.id==='string'&&typeof p.name==='string');if(v.associations&&typeof v.associations==='object')Object.assign(associations,v.associations);if(projects.some(p=>p.id===v.active))activeProject=v.active}catch{}$('suggest-memory').checked=localStorage.getItem('alivi-suggest:'+uid)==='yes';renderProjects()}
-function saveProjects(){if(!uid)return;try{localStorage.setItem(projectStorage(),JSON.stringify({projects,associations,active:activeProject}))}catch(e){$('chat-notice').textContent='Não foi possível salvar organização local: '+e.message}}
+function saveProjects(){if(!uid)return;try{localStorage.setItem(projectStorage(),JSON.stringify({projects,associations,active:activeProject}))}catch(e){$('chat-notice').textContent='Não foi possível salvar organização local: '+e.message}renderDesktopSidebar()}
 function visibleMessages(){return messages.filter(m=>(associations[m.id]||'')===activeProject)}
 function associate(m,project){if(project&&m.id){associations[m.id]=project;saveProjects()}}
-function renderProjects(){const list=$('project-list');list.replaceChildren();const options=[{id:'',name:'Conversa geral'},...projects];for(const p of options){const b=document.createElement('button');b.className=p.id===activeProject?'primary':'secondary';b.textContent=p.name;b.disabled=busy;b.onclick=()=>{if(busy)return;activeProject=p.id;saveProjects();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';clearSuggestion();chatRender(true);go('home')};const item=document.createElement('div');item.className='item';item.append(b);if(p.id){const rename=document.createElement('button');rename.className='secondary';rename.textContent='Renomear';rename.onclick=()=>{if(busy||!uid)return;const name=prompt('Novo nome da conversa',p.name)?.trim();if(!name||name.length>80)return;if(projects.some(x=>x.id!==p.id&&x.name.toLowerCase()===name.toLowerCase())){alert('Já existe uma conversa com este nome.');return}p.name=name;saveProjects();renderProjects()};item.append(rename)}list.append(item)}$('active-project').textContent=options.find(p=>p.id===activeProject)?.name||'Conversa geral'}
+function renderProjects(){const list=$('project-list');list.replaceChildren();const options=[{id:'',name:'Conversa geral'},...projects];for(const p of options){const b=document.createElement('button');b.className=p.id===activeProject?'primary':'secondary';b.textContent=p.name;b.disabled=busy;b.onclick=()=>{if(busy)return;activeProject=p.id;saveProjects();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';clearSuggestion();chatRender(true);go('home')};const item=document.createElement('div');item.className='item';item.append(b);if(p.id){const rename=document.createElement('button');rename.className='secondary';rename.textContent='Renomear';rename.onclick=()=>{if(busy||!uid)return;const name=prompt('Novo nome da conversa',p.name)?.trim();if(!name||name.length>80)return;if(projects.some(x=>x.id!==p.id&&x.name.toLowerCase()===name.toLowerCase())){alert('Já existe uma conversa com este nome.');return}p.name=name;saveProjects();renderProjects()};item.append(rename)}list.append(item)}$('active-project').textContent=options.find(p=>p.id===activeProject)?.name||'Conversa geral';renderDesktopSidebar()}
 $('create-project').onclick=()=>{if(!uid||busy)return;const name=$('project-name').value.trim();if(!name)return;if(projects.some(p=>p.name.toLowerCase()===name.toLowerCase())){alert('Já existe uma conversa com este nome.');return}projects.push({id:crypto.randomUUID(),name});activeProject=projects.at(-1).id;saveProjects();$('project-name').value='';lastReply='';clearSuggestion();renderProjects();chatRender(true);go('home')};
+
+// 3.8.0: navegação desktop em três colunas, sem alterar dados da nuvem.
+const DESKTOP_LAYOUT_KEY='alivi-desktop-sidebar-collapsed-v1';
+function desktopVisible(){return !!$('desktop-sidebar') && window.innerWidth>=1000}
+function desktopConversationName(p){return p.name||'Conversa sem título'}
+function openDesktopConversation(id){
+ if(busy||!uid)return;
+ activeProject=id;
+ saveProjects();
+ lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';
+ clearSuggestion();chatRender(true);go('home');
+ $('message').focus();
+}
+function renderDesktopSidebar(){
+ if(!$('desktop-sidebar'))return;
+ const filter=($('desktop-search').value||'').trim().toLocaleLowerCase('pt-BR');
+ const lastTime=id=>{
+  for(let i=messages.length-1;i>=0;i--)if((associations[messages[i].id]||'')===id)return Date.parse(messages[i].created_at||'')||0;
+  return 0;
+ };
+ const projectsOnly=projects.filter(p=>p.kind!=='chat');
+ const chatsOnly=projects.filter(p=>p.kind==='chat');
+ const general={id:'',name:'Conversa geral',kind:'chat'};
+ const recent=[general,...chatsOnly].sort((a,b)=>lastTime(b.id)-lastTime(a.id)||(b.created_at||'').localeCompare(a.created_at||''));
+ const pinned=projects.filter(p=>p.pinned).sort((a,b)=>lastTime(b.id)-lastTime(a.id));
+ function draw(targetId,items,isPinned=false){
+  const el=$(targetId);el.replaceChildren();let shown=0;
+  for(const p of items){
+   if(filter&&!desktopConversationName(p).toLocaleLowerCase('pt-BR').includes(filter))continue;
+   shown++;
+   const wrap=document.createElement('div');wrap.className='desktop-sidebar-item'+(activeProject===p.id?' selected':'');
+   const open=document.createElement('button');open.type='button';open.className='desktop-item-open';open.textContent=desktopConversationName(p);open.title=desktopConversationName(p);
+   if(activeProject===p.id)open.setAttribute('aria-current','page');
+   open.onclick=()=>openDesktopConversation(p.id);
+   wrap.append(open);
+   if(p.id){
+    const star=document.createElement('button');star.type='button';star.className='desktop-item-pin';star.textContent=p.pinned?'★':'☆';
+    star.title=p.pinned?'Desafixar conversa':'Fixar conversa';star.setAttribute('aria-label',star.title);star.setAttribute('aria-pressed',String(!!p.pinned));
+    star.onclick=()=>{p.pinned=!p.pinned;saveProjects();renderDesktopSidebar()};
+    wrap.append(star);
+   }
+   el.append(wrap);
+  }
+  if(!shown){const empty=document.createElement('div');empty.className='desktop-side-placeholder';empty.textContent=filter?'Nenhuma correspondência.':(isPinned?'Fixe conversas usando a estrela.':'Nenhum item ainda.');el.append(empty)}
+ }
+ draw('desktop-pinned',pinned,true);draw('desktop-projects',projectsOnly);draw('desktop-recents',recent);
+}
+function startDesktopChat(){
+ if(!uid||busy)return;
+ let n=1;while(projects.some(p=>p.name===`Nova conversa ${n}`))n++;
+ const now=new Date().toISOString();
+ const chat={id:crypto.randomUUID(),name:`Nova conversa ${n}`,kind:'chat',autoTitle:true,created_at:now,pinned:false};
+ projects.push(chat);activeProject=chat.id;lastReply='';clearSuggestion();
+ saveProjects();renderProjects();chatRender(true);go('home');$('message').value='';$('message').focus();
+}
+function maybeTitleNewChat(project,q){
+ const p=projects.find(p=>p.id===project&&p.kind==='chat'&&p.autoTitle);
+ if(!p)return;
+ let title=q.trim().replace(/\s+/g,' ');
+ if(title.length>48)title=title.slice(0,48).replace(/\s+\S*$/,'')+'…';
+ if(title){p.name=title;p.autoTitle=false;saveProjects();renderProjects()}
+}
+if($('desktop-sidebar')){
+ $('desktop-new-chat').addEventListener('click',startDesktopChat);
+ $('desktop-search').addEventListener('input',renderDesktopSidebar);
+ $('desktop-project-add').addEventListener('click',()=>{go('projects');$('project-name').focus()});
+ const toggleDesktopSidebar=()=>{const collapsed=$('main-app').classList.toggle('desktop-sidebar-collapsed');
+  try{localStorage.setItem(DESKTOP_LAYOUT_KEY,collapsed?'yes':'no')}catch{}
+  $('desktop-sidebar-toggle').setAttribute('aria-expanded',String(!collapsed));};
+ $('desktop-sidebar-toggle').addEventListener('click',toggleDesktopSidebar);
+ $('desktop-close-sidebar').addEventListener('click',toggleDesktopSidebar);
+ $('desktop-sidebar-toggle').setAttribute('aria-expanded',String(localStorage.getItem(DESKTOP_LAYOUT_KEY)!=='yes'));
+ if(localStorage.getItem(DESKTOP_LAYOUT_KEY)==='yes')$('main-app').classList.add('desktop-sidebar-collapsed');
+ $('desktop-rail-more').addEventListener('click',()=>{$('dots').click()});
+}
+
 function scrollLatest(){const t=$('chat-log');t.scrollTop=t.scrollHeight;requestAnimationFrame(()=>{if($('page-home').classList.contains('active'))t.scrollTop=t.scrollHeight})}
 $('chat-bottom').onclick=scrollLatest;
 $('suggest-memory').onchange=()=>{if(uid)localStorage.setItem('alivi-suggest:'+uid,$('suggest-memory').checked?'yes':'no');if(!$('suggest-memory').checked)clearSuggestion()};
@@ -34,7 +110,7 @@ function suggestPreference(q,rows){if(!$('suggest-memory').checked)return;const 
 $('dismiss-memory').onclick=clearSuggestion;
 $('accept-memory').onclick=async()=>{if(!uid||!pendingSuggestion||busy)return;const g=generation,v=pendingSuggestion;busy=true;$('accept-memory').disabled=true;try{const status=await storeMemory(v,g);if(g===generation){$('memory-status').textContent=status;clearSuggestion()}}catch(e){if(g===generation)$('memory-status').textContent='Memória não salva: '+e.message}finally{busy=false;$('accept-memory').disabled=false}};
 function chatRender(force=true){const target=$('chat-log');const oldTop=target.scrollTop,nearBottom=target.scrollHeight-target.clientHeight-oldTop<70;const visible=visibleMessages();target.replaceChildren();visible.slice(-100).forEach(m=>{const d=document.createElement('div');d.className='bubble '+(m.role==='user'?'user':'alivi');const name=document.createElement('small');name.textContent=m.role==='user'?'VOCÊ':'ALIVI';d.append(name,document.createTextNode(m.text));if(m.role==='assistant'&&!m.text.startsWith('Não consegui')){const b=document.createElement('button');b.className='secondary';b.style.display='block';b.textContent='🔊 Ouvir';b.onclick=()=>say(m.text,true);d.append(b)}target.append(d)});document.querySelector('.welcome').hidden=visible.length>0;if(force||nearBottom)scrollLatest();else target.scrollTop=oldTop}
-function chatSave(force=true){try{localStorage.setItem(CHATKEY+':'+uid,JSON.stringify(messages.slice(-100)))}catch(e){$('chat-notice').textContent='Não foi possível salvar histórico: '+e.message}chatRender(force)}
+function chatSave(force=true){try{localStorage.setItem(CHATKEY+':'+uid,JSON.stringify(messages.slice(-100)))}catch(e){$('chat-notice').textContent='Não foi possível salvar histórico: '+e.message}chatRender(force);renderDesktopSidebar()}
 let audio=null,objectUrl=null;
 function stopAudio(){if(audio){audio.pause();audio.src='';audio=null}if(objectUrl){URL.revokeObjectURL(objectUrl);objectUrl=null}if('speechSynthesis'in window)speechSynthesis.cancel()}
 function getBase(){return DEFAULT_API}
@@ -72,7 +148,7 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
-async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;busy=true;const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);chatSave();let memoryStatus='';
+async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;busy=true;const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
 const fact=memoryFact(q);
 let directReply='';
 if(!fact){await syncManagement();if(g!==generation)return;directReply=reminderCommand(q)||extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lembrete cancelado|lembrete atualizado|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){await syncManagement();if(g!==generation)return;directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';}}
