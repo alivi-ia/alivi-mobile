@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.1',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.2',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -211,11 +211,15 @@ function preferenceCandidate(q){const s=q.trim();if(s.length>250||s.includes('?'
 function suggestPreference(q,rows){if(!$('suggest-memory').checked)return;const candidate=preferenceCandidate(q);if(!candidate||rows.some(r=>canonical(r.memory_value)===canonical(candidate)))return;pendingSuggestion=candidate;$('suggestion-text').textContent='Deseja guardar esta preferência na memória? '+candidate;$('memory-suggestion').hidden=false}
 $('dismiss-memory').onclick=clearSuggestion;
 $('accept-memory').onclick=async()=>{if(!uid||!pendingSuggestion||busy)return;const g=generation,v=pendingSuggestion;busy=true;$('accept-memory').disabled=true;try{const status=await storeMemory(v,g);if(g===generation){$('memory-status').textContent=status;clearSuggestion()}}catch(e){if(g===generation)$('memory-status').textContent='Memória não salva: '+e.message}finally{busy=false;$('accept-memory').disabled=false}};
-// ALIVI 3.10.1: voz por turnos com retomada automática controlada, sem escuta durante TTS.
-// A escuta encerra ao mudar de aba, sair do modo, revogar permissão ou por comando de voz.
+// ALIVI 3.10.2 — pausas inteligentes: encerramento automático do reconhecedor NÃO envia a mensagem.
+// Se o navegador encerrar a captura após silêncio, preservamos os trechos e tentamos reabrir a escuta.
+// O envio exige 6,5 segundos sem novas palavras, comando de voz explícito ou botão Enviar fala.
+const VOICE_PAUSE_MS=6500;
 let voiceModeOn=false,voiceRecognitionFailed=false,voiceFinalTranscript=false;
 let voiceSession=0,voiceListening=false,voiceStarting=false,voiceRequested=false;
 let voiceResumeTimer=null,voiceResumeTries=0,voiceSilenceRetries=0,voiceRecognitionText='';
+let voiceDraftTimer=null,voiceSavedTranscript='',voiceCurrentTranscript='',voiceLastInputTime=0;
+let voiceLastError='';
 const voiceStopPhrases=new Set([
  'encerrar','encerra','encerrar conversa','encerra conversa','encerrar a conversa',
  'finalizar conversa','finaliza conversa','terminar conversa','termina conversa',
@@ -229,25 +233,52 @@ function isVoiceStop(text){const s=voiceNormalize(text).replace(/^(?:ei |oi |ola
 function voiceStatus(text){$('voice-status').textContent=text;const info=$('voice-mode-explain');if(info)info.textContent=text||'Pronta para ouvir.'}
 function voiceShowResume(visible){$('voice-talk').hidden=!visible}
 function voiceShowStop(visible){$('voice-stop').hidden=!visible}
+function voiceShowSend(visible){$('voice-send').hidden=!visible}
 function clearVoiceTimer(){if(voiceResumeTimer!==null){clearTimeout(voiceResumeTimer);voiceResumeTimer=null}}
+function clearVoiceDraftTimer(){if(voiceDraftTimer!==null){clearTimeout(voiceDraftTimer);voiceDraftTimer=null}}
+function voiceDraftText(){return [voiceSavedTranscript,voiceCurrentTranscript].filter(Boolean).join(' ').replace(/\s+/g,' ').trim()}
+function voiceUpdateDraft(){const text=voiceDraftText();$('message').value=text;voiceShowSend(!!text)}
+function voiceClearDraft(){clearVoiceDraftTimer();voiceSavedTranscript='';voiceCurrentTranscript='';voiceLastInputTime=0;voiceShowSend(false)}
 function voiceAbortRecognition(){voiceRequested=false;voiceRecognitionText='';voiceFinalTranscript=false;if(rec){try{rec.abort()}catch{}}}
 function voicePause(message){clearVoiceTimer();voiceShowResume(true);voiceStatus(message||'Toque em Retomar para continuar.');}
+function voiceSubmitDraft(force=false){
+ if(!voiceModeOn||!uid)return;
+ const text=voiceDraftText();if(!text)return;
+ if(!force&&Date.now()-voiceLastInputTime<VOICE_PAUSE_MS-50){voiceScheduleDraftSend();return}
+ clearVoiceDraftTimer();clearVoiceTimer();
+ voiceRequested=false;try{if(rec)rec.abort()}catch{}
+ const clean=text.replace(/\s*(?:alivi[\s,]+)?(?:pode responder|responda agora|pode enviar)(?:[.!?])?\s*$/iu,'').trim();
+ voiceClearDraft();$('message').value=clean;
+ if(isVoiceStop(text)){setVoiceMode(false);$('message').value='';$('chat-notice').textContent='Conversa por voz encerrada.';return}
+ if(!clean){voiceStatus('🎙 Pode continuar falando.');scheduleVoiceResume(350);return}
+ if(busy||syncing){voicePause('Ainda estou processando uma mensagem. Seu texto foi mantido para envio.');return}
+ voiceSilenceRetries=0;voiceStatus('Mensagem completa. ALIVI pensando...');void sendChat();
+}
+function voiceScheduleDraftSend(){
+ clearVoiceDraftTimer();if(!voiceModeOn||!voiceDraftText())return;
+ const current=voiceSession;
+ voiceDraftTimer=setTimeout(()=>{
+  voiceDraftTimer=null;if(!voiceModeOn||voiceSession!==current||document.hidden)return;
+  voiceSubmitDraft(false);
+ },VOICE_PAUSE_MS);
+}
 function setVoiceMode(enabled){
- const next=!!enabled;voiceSession++;clearVoiceTimer();voiceResumeTries=0;voiceSilenceRetries=0;
+ const next=!!enabled;voiceSession++;clearVoiceTimer();voiceClearDraft();voiceResumeTries=0;voiceSilenceRetries=0;
  voiceModeOn=next;voiceShowStop(false);$('speak').checked=next;$('voice-mode-panel').hidden=!next;
  $('main-app').classList.toggle('voice-mode-on',next);
  $('voice-mode-toggle').setAttribute('aria-pressed',String(next));
  $('voice-mode-toggle').textContent=next?'✕ Encerrar voz':'✧ Voz';
  $('voice-mode-toggle').title=next?'Encerrar conversa por voz':'Ativar conversa por voz';
- if(!next){voiceRecognitionFailed=true;voiceAbortRecognition();stopAudio();$('voice-status').textContent='';$('voice-mode-explain').textContent='Pronta para ouvir.';voiceShowResume(false);}
+ if(!next){voiceRecognitionFailed=true;voiceAbortRecognition();stopAudio();$('voice-status').textContent='';$('voice-mode-explain').textContent='Pronta para ouvir.';voiceShowResume(false)}
  else{voiceRecognitionFailed=false;voiceShowResume(false);voiceStatus('Ativando microfone...');if(!rec){voicePause('Reconhecimento de voz não disponível neste navegador.');return}startSpeechInput(true)}
 }
 $('voice-mode-toggle').addEventListener('click',()=>setVoiceMode(!voiceModeOn));
 $('voice-exit').addEventListener('click',()=>setVoiceMode(false));
 $('voice-talk').addEventListener('click',()=>{voiceSilenceRetries=0;startSpeechInput(true)});
-$('voice-replay').addEventListener('click',()=>{if(!lastReply){voiceStatus('Ainda não há resposta para repetir.');return}clearVoiceTimer();voiceAbortRecognition();void say(lastReply,true)});
+$('voice-send').addEventListener('click',()=>voiceSubmitDraft(true));
+$('voice-replay').addEventListener('click',()=>{if(!lastReply){voiceStatus('Ainda não há resposta para repetir.');return}clearVoiceTimer();voiceAbortRecognition();voiceClearDraft();void say(lastReply,true)});
 $('voice-stop').addEventListener('click',()=>{voiceShowStop(false);stopAudio();if(voiceModeOn){voiceStatus('Resposta interrompida. Retomando microfone...');scheduleVoiceResume(500)}else voiceStatus('Áudio interrompido.')});
-// Não usa microfone indefinidamente: um reinício por turno e até duas tentativas de silêncio.
+// Limitamos tentativas automáticas sem nenhuma fala; pausas com texto são tratadas pelo temporizador.
 function scheduleVoiceResume(delay=550){
  if(!voiceModeOn||!uid||!rec||document.hidden)return;
  clearVoiceTimer();const mySession=voiceSession;voiceShowResume(false);
@@ -325,7 +356,7 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
-async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;busy=true;const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
+async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
 const fact=memoryFact(q);
 let directReply='';
 if(!fact){await syncManagement();if(g!==generation)return;directReply=reminderCommand(q)||extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lembrete cancelado|lembrete atualizado|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){await syncManagement();if(g!==generation)return;directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';}}
@@ -338,33 +369,51 @@ $('send').onclick=sendChat;$('message').addEventListener('keydown',e=>{if(e.key=
 const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
 if(Recognition){
  rec=new Recognition();rec.lang='pt-BR';rec.interimResults=true;rec.continuous=false;
- rec.onstart=()=>{voiceStarting=false;voiceListening=true;voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceRecognitionText='';voiceStatus('🎙 Ouvindo... Pode falar.');voiceShowResume(false);$('mic').disabled=true;$('voice-talk').disabled=true};
+ rec.onstart=()=>{
+  voiceStarting=false;voiceListening=true;voiceRecognitionFailed=false;voiceLastError='';
+  voiceFinalTranscript=false;voiceRecognitionText='';
+  voiceStatus(voiceModeOn?'🎙 Ouvindo. Pode fazer pausas; aguardo 6 segundos antes de enviar.':'🎙 Ouvindo... Pode falar.');
+  voiceShowResume(false);$('mic').disabled=true;$('voice-talk').disabled=true;
+ };
  rec.onresult=e=>{
   let partial='',final='';
   for(let i=0;i<e.results.length;i++){const part=e.results[i][0]?.transcript||'';partial+=part+' ';if(e.results[i].isFinal)final+=part+' '}
-  $('message').value=partial.trim();if(final.trim()){voiceRecognitionText=final.trim();voiceFinalTranscript=true}
+  if(voiceModeOn){
+   if(!voiceRequested)return;
+   const next=partial.trim();
+   if(next&&next!==voiceCurrentTranscript){
+    voiceCurrentTranscript=next;voiceRecognitionText=final.trim();voiceFinalTranscript=!!final.trim();
+    voiceLastInputTime=Date.now();voiceSilenceRetries=0;
+    voiceUpdateDraft();voiceScheduleDraftSend();
+    voiceStatus('🎙 Pode continuar. A ALIVI aguarda sua pausa para enviar.');
+    if(isVoiceStop(voiceDraftText())||/\b(?:alivi[\s,]+)?(?:pode responder|responda agora|pode enviar)[.!?]?\s*$/iu.test(next))voiceSubmitDraft(true);
+   }
+  }else{$('message').value=partial.trim();if(final.trim()){voiceRecognitionText=final.trim();voiceFinalTranscript=true}}
  };
  rec.onerror=e=>{
-  voiceRecognitionFailed=true;voiceStarting=false;
+  voiceRecognitionFailed=true;voiceStarting=false;voiceLastError=e.error||'unknown';
   const problem=({'not-allowed':'Permita o microfone nas configurações do navegador.','service-not-allowed':'Reconhecimento bloqueado pelo navegador.','audio-capture':'Microfone indisponível.','no-speech':'Não ouvi sua fala.','network':'Reconhecimento indisponível na rede.','aborted':'Escuta interrompida.'})[e.error]||'Microfone: '+e.error;
-  if(voiceModeOn&&e.error==='no-speech'){voiceSilenceRetries++;if(voiceSilenceRetries<=2)voiceStatus('Não ouvi sua fala. Tentarei ouvir novamente...');else voicePause('Não ouvi sua fala. Toque em Retomar quando quiser continuar.')}
-  else if(voiceModeOn&&e.error!=='aborted')voicePause(problem+' Toque em Retomar.');
+  if(voiceModeOn&&e.error==='no-speech'){
+   if(!voiceDraftText())voiceSilenceRetries++;
+   if(voiceSilenceRetries>2)voicePause('Não ouvi sua fala. Toque em Retomar quando quiser continuar.');
+  }else if(voiceModeOn&&e.error!=='aborted')voicePause(problem+' Toque em Retomar.');
   else if(!voiceModeOn&&e.error!=='aborted')voiceStatus(problem);
  };
  rec.onend=()=>{
   voiceListening=false;voiceStarting=false;$('mic').disabled=false;$('voice-talk').disabled=false;
   const shouldProcess=voiceRequested;voiceRequested=false;
   if(!shouldProcess)return;
-  const spoken=(voiceRecognitionText||$('message').value).trim();
-  if(voiceModeOn&&voiceFinalTranscript&&spoken){
-   if(isVoiceStop(spoken)){$('message').value='';setVoiceMode(false);$('chat-notice').textContent='Conversa por voz encerrada.';return}
-   voiceSilenceRetries=0;voiceStatus('Mensagem recebida. ALIVI pensando...');
-   if(!busy&&!syncing)void sendChat();else voicePause('Ainda estou processando a mensagem. Toque em Retomar.');
-  }else if(voiceModeOn&&voiceRecognitionFailed&&voiceSilenceRetries<=2){
-   // Somente silêncio permite retomar automaticamente; outros erros exigem toque.
-   if(!spoken&&voiceSilenceRetries>0&&voiceSilenceRetries<=2){voiceRecognitionFailed=false;voiceStatus('🎙 Tentando ouvir novamente...');scheduleVoiceResume(800)}
-  }else if(voiceModeOn&&!voiceRecognitionFailed){voicePause('Não consegui compreender. Toque em Retomar para falar novamente.')}
-  else if(!voiceModeOn&&!voiceRecognitionFailed)voiceStatus('Ditado concluído. Confira e envie a mensagem.');
+  if(voiceModeOn){
+   // O navegador encerra sessões após silêncio: nunca enviamos aqui.
+   if(voiceCurrentTranscript){
+    voiceSavedTranscript=[voiceSavedTranscript,voiceCurrentTranscript].filter(Boolean).join(' ').trim();
+    voiceCurrentTranscript='';voiceUpdateDraft();
+   }
+   if(voiceLastError&&voiceLastError!=='no-speech'&&voiceLastError!=='aborted')return;
+   if(!voiceDraftText()&&voiceSilenceRetries>2){voicePause('Toque em Retomar quando quiser conversar.');return}
+   if(voiceDraftText())voiceStatus('🎙 Pausa detectada. Pode continuar falando; sua mensagem ainda não foi enviada.');
+   scheduleVoiceResume(350);
+  }else if(!voiceRecognitionFailed)voiceStatus('Ditado concluído. Confira e envie a mensagem.');
  };
 }else $('mic').title='Reconhecimento de voz indisponível neste navegador';
 function startSpeechInput(automatic=false){
@@ -373,8 +422,11 @@ function startSpeechInput(automatic=false){
  if(busy||syncing||voiceLoading){if(voiceModeOn)voicePause('Ainda estou respondendo. Toque em Retomar em instantes.');return}
  if(automatic&&(!voiceModeOn||document.hidden))return;
  clearVoiceTimer();stopAudio();voiceShowResume(false);
- voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceRecognitionText='';voiceRequested=true;voiceStarting=true;
- $('message').value='';
+ voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceRecognitionText='';voiceLastError='';voiceRequested=true;voiceStarting=true;
+ // continuous melhora o Chrome no computador, mas o Android pode ignorar esta opção;
+ // quando o navegador encerrar mesmo assim, onend preserva o texto e retoma a escuta.
+ rec.continuous=!!voiceModeOn;
+ if(!voiceModeOn)$('message').value='';
  try{rec.start()}catch(e){voiceStarting=false;voiceRequested=false;voicePause('Microfone não iniciou. Toque em Retomar: '+e.message)}
 }
 $('mic').onclick=()=>startSpeechInput(false);
