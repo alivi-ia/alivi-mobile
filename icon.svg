@@ -1,1 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="42" fill="#10243f"/><path d="M42 155 96 35l54 120M61 111h70" stroke="#6fe1ff" stroke-width="19" fill="none" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="ALIVI">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#143b61"/><stop offset="1" stop-color="#08172d"/></linearGradient>
+<linearGradient id="a" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#25e7ff"/><stop offset=".5" stop-color="#0075d8"/><stop offset="1" stop-color="#72faff"/></linearGradient>
+<linearGradient id="sw" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#17a8ed"/><stop offset=".5" stop-color="#d5ffff"/><stop offset="1" stop-color="#32edff"/></linearGradient>
+</defs><rect width="128" height="128" rx="25" fill="url(#bg)"/><path d="M22 102 57 27 Q64 15 70 28 L106 102 H85 L65 57 44 102Z" fill="url(#a)" stroke="#1ad9f4" stroke-width="1.7"/><path d="M20 91 Q58 69 103 84 Q108 85 112 88 Q65 75 23 99Z" fill="url(#sw)"/><circle cx="109" cy="88" r="3" fill="#d4ffff"/></svg>

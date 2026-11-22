@@ -1,5 +1,5 @@
-const CACHE='alivi-mobile-v3.10.3';
-const FILES=['./','./index.html','./app.js','./app.js?v=3.10.2','./icon.svg','./manifest.webmanifest','./version.json'];
+const CACHE='alivi-mobile-v3.10.4';
+const FILES=['./','./index.html','./app.js','./app.js?v=3.10.4','./icon.svg','./logo-mark.png','./icon-192.png','./icon-512.png','./icon-maskable-512.png','./apple-touch-icon.png','./badge-96.png','./manifest.webmanifest','./version.json'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('alivi-mobile-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',e=>{if(e.data?.type==='SKIP_WAITING')self.skipWaiting()});
@@ -24,7 +24,7 @@ firebase.messaging().onBackgroundMessage(payload=>{
  const title=String(data.title||'ALIVI • Lembrete').slice(0,100);
  const body=String(data.body||'Você tem um aviso para conferir.').slice(0,220);
  return self.registration.showNotification(title,{
-  body, tag:String(data.tag||'alivi-fcm'),icon:'./icon.svg',badge:'./icon.svg',
+  body, tag:String(data.tag||'alivi-fcm'),icon:'./icon-192.png',badge:'./badge-96.png',
   data:{url:new URL('./?page=alerts',self.registration.scope).href,page:'alerts'}
  });
 });
