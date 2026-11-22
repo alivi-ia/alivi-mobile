@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.9.1',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.0',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -33,6 +33,7 @@ function desktopConversationName(p){return p.name||'Conversa sem título'}
 function openDesktopConversation(id){
  if(busy||!uid)return;
  activeProject=id;
+ stopAudio();
  saveProjects();
  lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';
  clearSuggestion();chatRender(true);go('home');closeMobileDrawer();
@@ -65,6 +66,13 @@ function renderDesktopSidebar(){
     star.title=p.pinned?'Desafixar conversa':'Fixar conversa';star.setAttribute('aria-label',star.title);star.setAttribute('aria-pressed',String(!!p.pinned));
     star.onclick=()=>{p.pinned=!p.pinned;saveProjects();renderDesktopSidebar()};
     wrap.append(star);
+    if(p.kind==='chat'){
+      const rename=document.createElement('button');rename.type='button';rename.className='desktop-item-rename';rename.textContent='✎';rename.title='Renomear conversa';rename.setAttribute('aria-label','Renomear '+p.name);
+      rename.onclick=()=>renameChat(p.id);
+      const del=document.createElement('button');del.type='button';del.className='desktop-item-delete';del.textContent='✕';del.title='Excluir conversa';del.setAttribute('aria-label','Excluir '+p.name);
+      del.onclick=()=>deleteNamedChat(p.id);
+      wrap.append(rename,del);
+    }
    }
    el.append(wrap);
   }
@@ -87,6 +95,51 @@ function maybeTitleNewChat(project,q){
  if(title.length>48)title=title.slice(0,48).replace(/\s+\S*$/,'')+'…';
  if(title){p.name=title;p.autoTitle=false;saveProjects();renderProjects()}
 }
+// Conversas criadas neste aparelho: nomes e agrupamentos continuam locais.
+function renameChat(id){
+ const p=projects.find(x=>x.id===id&&x.kind==='chat');if(!p||!uid||busy||syncing)return;
+ const name=prompt('Novo nome da conversa',p.name)?.trim();if(!name)return;
+ if(name.length>80){alert('Use no máximo 80 caracteres.');return}
+ if(projects.some(x=>x.id!==id&&x.name.toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR'))){alert('Já existe outra conversa com este nome.');return}
+ p.name=name;p.autoTitle=false;saveProjects();renderProjects();
+}
+async function deleteNamedChat(id){
+ const p=projects.find(x=>x.id===id&&x.kind==='chat');if(!p||!uid||busy||syncing)return;
+ // Use the saved association map rather than the last 100 loaded rows.
+ const ids=Object.keys(associations).filter(messageId=>associations[messageId]===id&&/^[0-9a-f-]{36}$/i.test(messageId));
+ const title=p.name;const warning=ids.length?
+  `Excluir "${title}" e as ${ids.length} mensagens vinculadas neste aparelho, inclusive do histórico sincronizado?\n\nEssa ação não pode ser desfeita. Memórias permanentes, agenda e notas não serão apagadas.`:
+  `Excluir a conversa vazia "${title}" deste aparelho?`;
+ if(!confirm(warning))return;
+ const userId=uid;const g=generation;busy=true;stopAudio();
+ try{
+  // DELETE restricts both user_id and exact message UUIDs: never wipe other chats.
+  for(let i=0;i<ids.length;i+=40){
+   const batch=ids.slice(i,i+40);const query='user_id=eq.'+encodeURIComponent(userId)+'&id=in.('+batch.join(',')+')';
+   await db('chat_messages','DELETE',query);
+   const remain=await db('chat_messages','GET',query+'&select=id');
+   if(remain.length)throw Error('Algumas mensagens não foram excluídas do banco.');
+   if(g!==generation||uid!==userId)throw Error('A sessão mudou durante a exclusão.');
+  }
+  const removed=new Set(ids);
+  messages=messages.filter(m=>!removed.has(m.id));
+  for(const messageId of ids)delete associations[messageId];
+  projects=projects.filter(x=>x.id!==id);
+  if(activeProject===id){activeProject='';lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';}
+  saveProjects();renderProjects();chatSave(true);closeMobileDrawer();
+  $('chat-notice').textContent='Conversa excluída. As memórias salvas foram preservadas.';
+ }catch(e){alert('Exclusão não concluída: '+e.message+'\nNenhuma outra conversa foi selecionada para exclusão.');}
+ finally{busy=false;if(g===generation)syncChat()}
+}
+function exportActiveChat(){
+ if(!uid)return;
+ const current=projects.find(x=>x.id===activeProject)?.name||'Conversa geral';
+ const rows=visibleMessages();if(!rows.length){alert('Esta conversa ainda não tem mensagens para exportar.');return}
+ const content=['ALIVI — '+current,'Exportação de mensagens carregadas em '+new Date().toLocaleString('pt-BR'),'---',...rows.map(m=>'['+(m.created_at?new Date(m.created_at).toLocaleString('pt-BR'):'sem data')+'] '+(m.role==='assistant'?'ALIVI':'VOCÊ')+'\n'+m.text+'\n')].join('\n');
+ const url=URL.createObjectURL(new Blob([content],{type:'text/plain;charset=utf-8'}));
+ const link=document.createElement('a');link.href=url;link.download='alivi_conversa_'+new Date().toISOString().slice(0,10)+'.txt';link.click();setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+$('export-active-chat').addEventListener('click',exportActiveChat);
 if($('desktop-sidebar')){
  $('desktop-new-chat').addEventListener('click',startDesktopChat);
  $('desktop-search').addEventListener('input',renderDesktopSidebar);
@@ -158,10 +211,29 @@ function preferenceCandidate(q){const s=q.trim();if(s.length>250||s.includes('?'
 function suggestPreference(q,rows){if(!$('suggest-memory').checked)return;const candidate=preferenceCandidate(q);if(!candidate||rows.some(r=>canonical(r.memory_value)===canonical(candidate)))return;pendingSuggestion=candidate;$('suggestion-text').textContent='Deseja guardar esta preferência na memória? '+candidate;$('memory-suggestion').hidden=false}
 $('dismiss-memory').onclick=clearSuggestion;
 $('accept-memory').onclick=async()=>{if(!uid||!pendingSuggestion||busy)return;const g=generation,v=pendingSuggestion;busy=true;$('accept-memory').disabled=true;try{const status=await storeMemory(v,g);if(g===generation){$('memory-status').textContent=status;clearSuggestion()}}catch(e){if(g===generation)$('memory-status').textContent='Memória não salva: '+e.message}finally{busy=false;$('accept-memory').disabled=false}};
-function chatRender(force=true){const target=$('chat-log');const oldTop=target.scrollTop,nearBottom=target.scrollHeight-target.clientHeight-oldTop<70;const visible=visibleMessages();target.replaceChildren();visible.slice(-100).forEach(m=>{const d=document.createElement('div');d.className='bubble '+(m.role==='user'?'user':'alivi');const name=document.createElement('small');name.textContent=m.role==='user'?'VOCÊ':'ALIVI';d.append(name,document.createTextNode(m.text));if(m.role==='assistant'&&!m.text.startsWith('Não consegui')){const b=document.createElement('button');b.className='secondary';b.style.display='block';b.textContent='🔊 Ouvir';b.onclick=()=>say(m.text,true);d.append(b)}target.append(d)});document.querySelector('.welcome').hidden=visible.length>0;if(force||nearBottom)scrollLatest();else target.scrollTop=oldTop}
+// Modo Voz 3.10.0: interação por turnos e leitura por TTS; NÃO é streaming full duplex.
+let voiceModeOn=false,voiceRecognitionFailed=false,voiceFinalTranscript=false;
+function voiceStatus(text){$('voice-status').textContent=text;const info=$('voice-mode-explain');if(info&&voiceModeOn)info.textContent=text||'Toque em Falar para continuar a conversa.'}
+function setVoiceMode(enabled){
+ voiceModeOn=!!enabled;
+ $('speak').checked=voiceModeOn;
+ $('voice-mode-panel').hidden=!voiceModeOn;
+ $('main-app').classList.toggle('voice-mode-on',voiceModeOn);
+ $('voice-mode-toggle').setAttribute('aria-pressed',String(voiceModeOn));
+ $('voice-mode-toggle').textContent=voiceModeOn?'✦ Voz ativa':'✧ Voz';
+ $('voice-mode-toggle').title=voiceModeOn?'Encerrar conversa por voz':'Ativar conversa por voz';
+ if(!voiceModeOn){voiceRecognitionFailed=true;try{rec?.abort()}catch{}stopAudio();$('voice-status').textContent='';}
+ else{voiceStatus('Modo Voz ligado. Toque em Falar agora, diga sua mensagem e a ALIVI responderá em voz.');}
+}
+$('voice-mode-toggle').addEventListener('click',()=>setVoiceMode(!voiceModeOn));
+$('voice-exit').addEventListener('click',()=>setVoiceMode(false));
+$('voice-talk').addEventListener('click',()=>startSpeechInput());
+$('voice-replay').addEventListener('click',()=>{if(lastReply)say(lastReply,true);else voiceStatus('Ainda não há resposta nesta conversa para repetir.')});
+$('voice-stop').addEventListener('click',()=>{stopAudio();voiceStatus('Áudio interrompido. Toque em Falar ou Repetir resposta.');});
+function chatRender(force=true){const target=$('chat-log');const oldTop=target.scrollTop,nearBottom=target.scrollHeight-target.clientHeight-oldTop<70;const visible=visibleMessages();target.replaceChildren();visible.slice(-100).forEach(m=>{const d=document.createElement('div');d.className='bubble '+(m.role==='user'?'user':'alivi');const name=document.createElement('small');name.textContent=m.role==='user'?'VOCÊ':'ALIVI';d.append(name,document.createTextNode(m.text));target.append(d)});document.querySelector('.welcome').hidden=visible.length>0;if(force||nearBottom)scrollLatest();else target.scrollTop=oldTop}
 function chatSave(force=true){try{localStorage.setItem(CHATKEY+':'+uid,JSON.stringify(messages.slice(-100)))}catch(e){$('chat-notice').textContent='Não foi possível salvar histórico: '+e.message}chatRender(force);renderDesktopSidebar()}
-let audio=null,objectUrl=null;
-function stopAudio(){if(audio){audio.pause();audio.src='';audio=null}if(objectUrl){URL.revokeObjectURL(objectUrl);objectUrl=null}if('speechSynthesis'in window)speechSynthesis.cancel()}
+let audio=null,objectUrl=null,playbackEpoch=0;
+function stopAudio(){playbackEpoch++;if(audio){audio.pause();audio.src='';audio=null}if(objectUrl){URL.revokeObjectURL(objectUrl);objectUrl=null}if('speechSynthesis'in window)speechSynthesis.cancel()}
 function getBase(){return DEFAULT_API}
 const SB='https://xadzckilujbydycebizj.supabase.co', PUB='sb_publishable_Gm2JW3ns-WmQmFvg3JNXjA_n0VjCDpD', SESSION='alivi-auth-v1';
 let session=null, refreshing=null, generation=0;
@@ -169,13 +241,13 @@ async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+p
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
 async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
 async function restore(){sessionStorage.removeItem(TOKENKEY);if(location.hash.includes('access_token=')||location.hash.includes('error='))history.replaceState(null,'',location.pathname+location.search);try{session=JSON.parse(localStorage.getItem(SESSION)||'null');if(session)await enter();else $('auth-status').textContent='Entre na sua conta.'}catch(e){$('auth-status').textContent='Não foi possível restaurar a sessão: '+e.message}}
 let readyText='',voiceLoading=false;
-async function say(text,manual=false){if(manual&&audio&&readyText===text){try{await audio.play();$('voice-status').textContent='🔊 ALIVI falando...'}catch(e){$('voice-status').textContent=e.message}return}if((!manual&&!$('speak').checked)||voiceLoading)return;voiceLoading=true;const g=generation;try{const token=await getToken();if(!token)return;stopAudio();$('voice-status').textContent='🔊 Preparando áudio...';const response=await fetch(getBase()+'/speech',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({text:text.slice(0,3000)})});if(!response.ok)throw Error('HTTP '+response.status);const blob=await response.blob();if(g!==generation)return;objectUrl=URL.createObjectURL(blob);audio=new Audio(objectUrl);readyText=text;audio.onended=()=>{$('voice-status').textContent=''};audio.onerror=()=>{$('voice-status').textContent='Não foi possível reproduzir o áudio.'};try{await audio.play();$('voice-status').textContent='🔊 ALIVI falando...'}catch{$('voice-status').textContent='Áudio pronto. Toque em Ouvir para reproduzir.'}}catch(e){$('voice-status').textContent='Voz indisponível: '+e.message}finally{voiceLoading=false}}
+async function say(text,manual=false){if(manual&&audio&&readyText===text){try{await audio.play();voiceStatus('🔊 ALIVI falando...')}catch(e){$('voice-status').textContent=e.message}return}if((!manual&&!$('speak').checked)||voiceLoading)return;voiceLoading=true;const g=generation;try{const token=await getToken();if(!token)return;stopAudio();const requestEpoch=playbackEpoch;voiceStatus('🔊 Preparando resposta em voz...');const response=await fetch(getBase()+'/speech',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({text:text.slice(0,3000)})});if(!response.ok)throw Error('HTTP '+response.status);const blob=await response.blob();if(g!==generation||requestEpoch!==playbackEpoch||(!manual&&!voiceModeOn))return;objectUrl=URL.createObjectURL(blob);audio=new Audio(objectUrl);readyText=text;audio.onended=()=>{voiceStatus(voiceModeOn?'Pronta para ouvir você. Toque em Falar agora.':'')};audio.onerror=()=>{voiceStatus('Não foi possível reproduzir o áudio.')};try{await audio.play();voiceStatus('🔊 ALIVI falando...')}catch{voiceStatus('Áudio pronto. Toque em Repetir resposta no painel de voz.')}}catch(e){voiceStatus('Voz indisponível: '+e.message)}finally{voiceLoading=false}}
 function localReply(q){const t=q.toLowerCase();if(t.includes('nota'))return 'Suas notas estão na aba Notas. Você tem '+notes.length+' nota(s) salva(s) neste aparelho.';return 'Para conversar com a ALIVI, configure seu token em Ajustes → Chat e voz.'}
 let lastReply='';
 // Memory operations: scope every request to the authenticated account.
@@ -205,11 +277,23 @@ if(fact){try{memoryStatus=await storeMemory(fact,g);memory=await readMemories(10
 else if(!directReply&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q)){const rows=await readMemories(10000);directReply=rows.length?'Memórias salvas ('+rows.length+'):\n'+rows.map((r,i)=>(i+1)+'. '+r.memory_value).join('\n'):'Nenhuma memória salva.';}
 if(g!==generation)return;$('memory-status').textContent=memoryStatus;
 const uniqueMemory=contextualMemories(memory,q,history);
-let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation)$('chat-notice').textContent='Falha: '+e.message}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat()}}
+let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation)$('chat-notice').textContent='Falha: '+e.message}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat()}}
 $('send').onclick=sendChat;$('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
-const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;if(Recognition){rec=new Recognition();rec.lang='pt-BR';rec.interimResults=true;rec.continuous=false;rec.onstart=()=>{$('voice-status').textContent='🎙 Ouvindo...';$('mic').disabled=true};rec.onresult=e=>{let words='';for(let i=0;i<e.results.length;i++)words+=e.results[i][0].transcript;$('message').value=words};rec.onerror=e=>{$('voice-status').textContent=({'not-allowed':'Permita o microfone nas configurações do navegador.','no-speech':'Não ouvi fala. Tente novamente.','network':'Reconhecimento indisponível na rede.'})[e.error]||'Microfone: '+e.error};rec.onend=()=>{$('mic').disabled=false;if($('voice-status').textContent==='🎙 Ouvindo...')$('voice-status').textContent='Ditado concluído. Confira e envie a mensagem.'}}else $('mic').title='Reconhecimento de voz indisponível neste navegador';
-$('mic').onclick=()=>{if(!rec){$('voice-status').textContent='Este navegador não oferece reconhecimento de fala. Use o teclado.';return}stopAudio();try{rec.start()}catch(e){$('voice-status').textContent=e.message}};
-$('repeat-voice').onclick=()=>{if(lastReply)say(lastReply,true);else $('voice-status').textContent='Ainda não há resposta para reproduzir.'};
+const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
+if(Recognition){
+ rec=new Recognition();rec.lang='pt-BR';rec.interimResults=true;rec.continuous=false;
+ rec.onstart=()=>{voiceRecognitionFailed=false;voiceFinalTranscript=false;voiceStatus('🎙 Ouvindo... fale sua mensagem.');$('mic').disabled=true;$('voice-talk').disabled=true};
+ rec.onresult=e=>{let words='',hasFinal=false;for(let i=0;i<e.results.length;i++){words+=e.results[i][0].transcript;if(e.results[i].isFinal)hasFinal=true;}$('message').value=words;voiceFinalTranscript=voiceFinalTranscript||hasFinal};
+ rec.onerror=e=>{voiceRecognitionFailed=true;voiceStatus(({'not-allowed':'Permita o microfone nas configurações do navegador.','no-speech':'Não ouvi fala. Tente novamente.','network':'Reconhecimento indisponível na rede.'})[e.error]||'Microfone: '+e.error)};
+ rec.onend=()=>{$('mic').disabled=false;$('voice-talk').disabled=false;if(!voiceRecognitionFailed&&voiceModeOn&&voiceFinalTranscript&&$('message').value.trim()&&!busy&&!syncing){voiceStatus('Mensagem ouvida. Enviando...');void sendChat()}else if(!voiceRecognitionFailed){voiceStatus(voiceModeOn?'Pronta para ouvir você. Toque em Falar novamente.':'Ditado concluído. Confira e envie a mensagem.')}};
+}else $('mic').title='Reconhecimento de voz indisponível neste navegador';
+function startSpeechInput(){
+ if(!rec){voiceStatus('Este navegador não oferece reconhecimento de fala. Use o teclado.');return}
+ if(busy||syncing){voiceStatus('Aguarde o fim da resposta anterior.');return}
+ stopAudio();try{rec.start()}catch(e){voiceStatus('Microfone: '+e.message)}
+}
+$('mic').onclick=startSpeechInput;
+$('repeat-voice').onclick=()=>{if(lastReply)say(lastReply,true);else voiceStatus('Ainda não há resposta para reproduzir.')};
 $('attach').onclick=()=>{$('chat-notice').textContent='Anexos ainda não estão disponíveis nesta versão.'};
 $('clear-token').onclick=async()=>{const t=session?.access_token;try{await unregisterRemotePush()}catch{}lock();if(t)try{await fetch(SB+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+t}})}catch{}};
 $('clear-chat').onclick=async()=>{if(!uid||busy||syncing||!confirm('Apagar conversas sincronizadas em todos os aparelhos?'))return;busy=true;try{await db('chat_messages','DELETE','user_id=eq.'+encodeURIComponent(uid));messages=[];associations=Object.create(null);saveProjects();lastReply='';chatSave();stopAudio()}catch(e){alert(e.message)}finally{busy=false}};chatRender();
