@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.5.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.6.0',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -85,7 +85,7 @@ const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let r
 $('mic').onclick=()=>{if(!rec){$('voice-status').textContent='Este navegador não oferece reconhecimento de fala. Use o teclado.';return}stopAudio();try{rec.start()}catch(e){$('voice-status').textContent=e.message}};
 $('repeat-voice').onclick=()=>{if(lastReply)say(lastReply,true);else $('voice-status').textContent='Ainda não há resposta para reproduzir.'};
 $('attach').onclick=()=>{$('chat-notice').textContent='Anexos ainda não estão disponíveis nesta versão.'};
-$('clear-token').onclick=async()=>{const t=session?.access_token;lock();if(t)try{await fetch(SB+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+t}})}catch{}};
+$('clear-token').onclick=async()=>{const t=session?.access_token;try{await unregisterRemotePush()}catch{}lock();if(t)try{await fetch(SB+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+t}})}catch{}};
 $('clear-chat').onclick=async()=>{if(!uid||busy||syncing||!confirm('Apagar conversas sincronizadas em todos os aparelhos?'))return;busy=true;try{await db('chat_messages','DELETE','user_id=eq.'+encodeURIComponent(uid));messages=[];associations=Object.create(null);saveProjects();lastReply='';chatSave();stopAudio()}catch(e){alert(e.message)}finally{busy=false}};chatRender();
 async function update(){go('settings');const st=$('updateStatus');st.textContent='Verificando atualização...';try{const response=await fetch('./version.json?check='+Date.now(),{cache:'no-store'});if(!response.ok)throw Error('Servidor indisponível');const v=await response.json();if(!v.version||typeof v.version!=='string')throw Error('Versão inválida');const reg=await navigator.serviceWorker?.getRegistration();if(reg){await reg.update();if(reg.waiting){st.textContent='Atualização encontrada. Aplicando...';reg.waiting.postMessage({type:'SKIP_WAITING'});setTimeout(()=>location.reload(),1200);return}}if(v.version!==VERSION){st.textContent='Versão '+v.version+' disponível. Reabrindo para carregar...';setTimeout(()=>location.reload(),1200)}else st.textContent='ALIVI atualizada: '+v.version+'.'}catch(e){st.textContent='Não foi possível verificar: '+e.message;st.classList.add('error')}}
 $('update').onclick=update;$('menu-update').onclick=update;render();if('serviceWorker'in navigator){navigator.serviceWorker.register('./sw.js').catch(()=>{})}navigator.serviceWorker?.addEventListener('controllerchange',()=>location.reload());
@@ -172,7 +172,7 @@ function noticePrefs(){try{return {...{auto:false,quiet:true,agenda:true,finance
 function storeNotice(p){localStorage.setItem(noticeKey(),JSON.stringify(p))}
 function renderAlerts(){if(!uid)return;const prefs=noticePrefs(),rows=noticeRows(),unseen=rows.filter(r=>!prefs.seen.includes(r.key));$('alert-badge').textContent=unseen.length?'🔔 '+unseen.length:'';$('alert-badge').hidden=!unseen.length;$('alert-menu').textContent='🔔 Notificações inteligentes'+(unseen.length?' ('+unseen.length+')':'');$('notice-count').textContent=unseen.length+' não vistas';const root=$('alerts-list');root.replaceChildren();const selected=rows.filter(r=>noticeFilter==='all'||(noticeFilter==='priority'?r.urgent:!prefs.seen.includes(r.key)));if(!selected.length)root.textContent='Nenhum aviso nesta seleção.';for(const r of selected){const item=document.createElement('article');item.className='neon-notice'+(r.urgent?' urgent':'')+(prefs.seen.includes(r.key)?' seen':'');const h=document.createElement('header'),img=document.createElement('img'),label=document.createElement('strong');img.src='./icon.svg';img.alt='';label.textContent='ALIVI • '+r.category+(r.urgent?' • Atenção':'');h.append(img,label);const title=document.createElement('h3');title.textContent=r.title;const detail=document.createElement('p');detail.textContent=r.detail;const actions=document.createElement('div');actions.className='neon-actions';const seen=document.createElement('button');seen.className='secondary';seen.textContent=prefs.seen.includes(r.key)?'Visto':'Marcar como visto';seen.disabled=prefs.seen.includes(r.key);seen.onclick=()=>{const p=noticePrefs();p.seen=[...new Set([...p.seen,r.key])];try{storeNotice(p);renderAlerts()}catch{alert('Não consegui salvar a preferência.')}};const open=document.createElement('button');open.className='primary';open.textContent='Abrir';open.onclick=()=>go(r.page);actions.append(seen,open);item.append(h,title,detail,actions);root.append(item)}for(const k of ['auto','quiet','agenda','finance','business'])$('notice-'+k).checked=!!prefs[k];for(const k of ['all','priority','unseen'])$('notice-'+k).setAttribute('aria-pressed',String(noticeFilter===k));maybeNotify(rows)}
 for(const k of ['all','priority','unseen'])$('notice-'+k).onclick=()=>{noticeFilter=k;renderAlerts()};
-for(const k of ['auto','quiet','agenda','finance','business'])$('notice-'+k).onchange=()=>{if(!uid)return;const p=noticePrefs();p[k]=$('notice-'+k).checked;try{storeNotice(p)}catch{alert('Não consegui salvar a configuração.')}renderAlerts()};
+for(const k of ['auto','quiet','agenda','finance','business'])$('notice-'+k).onchange=()=>{if(!uid)return;const p=noticePrefs();p[k]=$('notice-'+k).checked;try{storeNotice(p)}catch{alert('Não consegui salvar a configuração.')}if(k==='quiet')syncRemoteQuiet(p.quiet).catch(e=>pushStatus('Preferência remota não sincronizada: '+e.message));renderAlerts()};
 function noticePermission(){return typeof Notification!=='undefined'&&Notification.permission==='granted'}
 async function showSystemNotice(title,body,tag){if(!noticePermission()||!navigator.serviceWorker)throw Error('Autorize as notificações em um navegador compatível.');const reg=await navigator.serviceWorker.getRegistration();if(!reg?.active)throw Error('Serviço de notificações ainda não disponível.');await reg.showNotification(title,{body,tag,icon:'./icon.svg',data:{page:'alerts'}})}
 $('notice-enable').onclick=async()=>{try{if(typeof Notification==='undefined')throw Error('Notificações indisponíveis neste navegador. No iPhone, instale a ALIVI na tela inicial.');const result=await Notification.requestPermission();$('notice-status').textContent=result==='granted'?'Notificações autorizadas.':'Permissão não concedida.'}catch(e){$('notice-status').textContent=e.message}};
@@ -220,5 +220,44 @@ function reminderCommand(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').rep
  return '';
 }
 function reminderRows(now=new Date()){const today=reminderDay(now);return agenda.filter(x=>x.reminder&&!x.done&&x.time).flatMap(x=>{const day=x.daily?today:x.date;if(day<x.date||new Date(day+'T'+x.time)>now)return [];return [{key:'reminder:'+x.id+':'+day+':'+x.time,page:'agenda',category:'Lembrete',title:x.title,detail:agendaDateLabel(day)+' às '+x.time,urgent:true}];});}
+
+
+async function syncRemoteQuiet(quiet){if(!uid)return;const reg=await navigator.serviceWorker?.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(!sub)return;await db('alivi_push_subscriptions','PATCH','user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(sub.endpoint),{quiet:!!quiet})}
+
+// 3.6.0 — Web Push: the private VAPID key stays ONLY in the Supabase Edge Function secrets.
+const PUSH_URL=SB.replace('.supabase.co','.supabase.co')+'/functions/v1/alivi-push';
+function pushStatus(t){const el=$('push-status');if(el)el.textContent=t}
+function pushKeyBytes(b64){const b=b64.replace(/-/g,'+').replace(/_/g,'/');const binary=atob(b.padEnd(Math.ceil(b.length/4)*4,'='));return Uint8Array.from(binary,c=>c.charCodeAt(0))}
+function pushAvailable(){return !!(window.isSecureContext&&'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window)}
+async function pushRegistration(){const reg=await navigator.serviceWorker.ready;if(!reg?.pushManager)throw Error('Este navegador não permite Web Push. No iPhone, instale o aplicativo na tela inicial.');return reg}
+async function registerRemotePush(){
+ if(!uid)throw Error('Entre na sua conta ALIVI primeiro.');
+ if(!pushAvailable())throw Error('Web Push indisponível neste navegador ou nesta instalação.');
+ const permission=await Notification.requestPermission();if(permission!=='granted')throw Error('Permissão de notificações não concedida.');
+ const response=await fetch(PUSH_URL+'?action=public_key',{cache:'no-store'});
+ const config=await response.json().catch(()=>({}));if(!response.ok||!config.publicKey)throw Error('Servidor remoto não configurado. Instale a função e a chave VAPID no Supabase.');
+ const reg=await pushRegistration();let sub=await reg.pushManager.getSubscription();
+ if(sub&&config.publicKey!==localStorage.getItem('alivi-vapid-public')){await sub.unsubscribe();sub=null}
+ if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:pushKeyBytes(config.publicKey)});
+ const value=sub.toJSON();if(!value.endpoint||!value.keys?.p256dh||!value.keys?.auth)throw Error('Inscrição push inválida.');
+ await db('alivi_push_subscriptions','POST','on_conflict=user_id,endpoint',{user_id:uid,endpoint:value.endpoint,p256dh:value.keys.p256dh,auth_secret:value.keys.auth,quiet:!!noticePrefs().quiet,enabled:true},false,true);
+ // Confirm existence to distinguish server persistence from local browser success.
+ const rows=await db('alivi_push_subscriptions','GET','select=endpoint&user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(value.endpoint)+'&limit=1');
+ if(!rows.length)throw Error('Não foi possível confirmar a inscrição remota no banco.');
+ localStorage.setItem('alivi-vapid-public',config.publicKey);
+ const p=noticePrefs();p.auto=true;storeNotice(p);renderAlerts();
+ return 'Avisos remotos ativados neste aparelho. Faça o teste de envio remoto.';
+}
+async function unregisterRemotePush(){const reg=await navigator.serviceWorker?.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(!sub)return 'Não havia inscrição remota neste aparelho.';if(uid)await db('alivi_push_subscriptions','DELETE','user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(sub.endpoint));await sub.unsubscribe();return 'Avisos remotos desativados neste aparelho.'}
+async function remotePushTest(){
+ const token=await getToken();if(!token)throw Error('Entre na sua conta.');
+ const response=await fetch(PUSH_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({action:'test'})});
+ const result=await response.json().catch(()=>({}));if(!response.ok)throw Error(result.error||result.message||('HTTP '+response.status));
+ if(!result.sent)throw Error('Nenhum aparelho recebeu o envio remoto. Ative os avisos remotos primeiro.');
+ return 'Teste remoto enviado a '+result.sent+' aparelho(s). Confira a barra de notificações.';
+}
+$('push-enable').onclick=async()=>{const b=$('push-enable');b.disabled=true;pushStatus('Ativando avisos remotos...');try{pushStatus(await registerRemotePush())}catch(e){pushStatus('Não foi possível ativar: '+e.message)}finally{b.disabled=false}};
+$('push-disable').onclick=async()=>{const b=$('push-disable');b.disabled=true;try{pushStatus(await unregisterRemotePush())}catch(e){pushStatus('Não foi possível desativar: '+e.message)}finally{b.disabled=false}};
+$('push-test').onclick=async()=>{const b=$('push-test');b.disabled=true;pushStatus('Enviando teste remoto...');try{pushStatus(await remotePushTest())}catch(e){pushStatus('Teste remoto falhou: '+e.message)}finally{b.disabled=false}};
 
 restore();
