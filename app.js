@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.2',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.3',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -215,10 +215,13 @@ $('accept-memory').onclick=async()=>{if(!uid||!pendingSuggestion||busy)return;co
 // Se o navegador encerrar a captura após silêncio, preservamos os trechos e tentamos reabrir a escuta.
 // O envio exige 6,5 segundos sem novas palavras, comando de voz explícito ou botão Enviar fala.
 const VOICE_PAUSE_MS=6500;
+// Desliga automaticamente o Modo Voz depois de 15 segundos aguardando nova fala.
+const VOICE_IDLE_MS=15000;
 let voiceModeOn=false,voiceRecognitionFailed=false,voiceFinalTranscript=false;
 let voiceSession=0,voiceListening=false,voiceStarting=false,voiceRequested=false;
 let voiceResumeTimer=null,voiceResumeTries=0,voiceSilenceRetries=0,voiceRecognitionText='';
 let voiceDraftTimer=null,voiceSavedTranscript='',voiceCurrentTranscript='',voiceLastInputTime=0;
+let voiceIdleTimer=null;
 let voiceLastError='';
 const voiceStopPhrases=new Set([
  'encerrar','encerra','encerrar conversa','encerra conversa','encerrar a conversa',
@@ -236,16 +239,29 @@ function voiceShowStop(visible){$('voice-stop').hidden=!visible}
 function voiceShowSend(visible){$('voice-send').hidden=!visible}
 function clearVoiceTimer(){if(voiceResumeTimer!==null){clearTimeout(voiceResumeTimer);voiceResumeTimer=null}}
 function clearVoiceDraftTimer(){if(voiceDraftTimer!==null){clearTimeout(voiceDraftTimer);voiceDraftTimer=null}}
+function clearVoiceIdleTimer(){if(voiceIdleTimer!==null){clearTimeout(voiceIdleTimer);voiceIdleTimer=null}}
+function voiceStartIdleCountdown(){
+ clearVoiceIdleTimer();
+ if(!voiceModeOn||!uid||document.hidden||voiceDraftText()||busy||voiceLoading||(audio&&!audio.paused))return;
+ const sessionId=voiceSession;
+ voiceIdleTimer=setTimeout(()=>{
+  voiceIdleTimer=null;
+  if(!voiceModeOn||sessionId!==voiceSession||voiceDraftText()||busy||voiceLoading||(audio&&!audio.paused))return;
+  setVoiceMode(false);
+  $('chat-notice').textContent='Modo Voz desligado automaticamente após 15 segundos sem fala. Toque em Voz para conversar novamente.';
+ },VOICE_IDLE_MS);
+}
+
 function voiceDraftText(){return [voiceSavedTranscript,voiceCurrentTranscript].filter(Boolean).join(' ').replace(/\s+/g,' ').trim()}
 function voiceUpdateDraft(){const text=voiceDraftText();$('message').value=text;voiceShowSend(!!text)}
 function voiceClearDraft(){clearVoiceDraftTimer();voiceSavedTranscript='';voiceCurrentTranscript='';voiceLastInputTime=0;voiceShowSend(false)}
 function voiceAbortRecognition(){voiceRequested=false;voiceRecognitionText='';voiceFinalTranscript=false;if(rec){try{rec.abort()}catch{}}}
-function voicePause(message){clearVoiceTimer();voiceShowResume(true);voiceStatus(message||'Toque em Retomar para continuar.');}
+function voicePause(message){clearVoiceTimer();voiceShowResume(true);voiceStatus(message||'Toque em Retomar para continuar.');if(!voiceIdleTimer)voiceStartIdleCountdown();}
 function voiceSubmitDraft(force=false){
  if(!voiceModeOn||!uid)return;
  const text=voiceDraftText();if(!text)return;
  if(!force&&Date.now()-voiceLastInputTime<VOICE_PAUSE_MS-50){voiceScheduleDraftSend();return}
- clearVoiceDraftTimer();clearVoiceTimer();
+ clearVoiceDraftTimer();clearVoiceTimer();clearVoiceIdleTimer();
  voiceRequested=false;try{if(rec)rec.abort()}catch{}
  const clean=text.replace(/\s*(?:alivi[\s,]+)?(?:pode responder|responda agora|pode enviar)(?:[.!?])?\s*$/iu,'').trim();
  voiceClearDraft();$('message').value=clean;
@@ -263,21 +279,21 @@ function voiceScheduleDraftSend(){
  },VOICE_PAUSE_MS);
 }
 function setVoiceMode(enabled){
- const next=!!enabled;voiceSession++;clearVoiceTimer();voiceClearDraft();voiceResumeTries=0;voiceSilenceRetries=0;
+ const next=!!enabled;voiceSession++;clearVoiceTimer();clearVoiceIdleTimer();voiceClearDraft();voiceResumeTries=0;voiceSilenceRetries=0;
  voiceModeOn=next;voiceShowStop(false);$('speak').checked=next;$('voice-mode-panel').hidden=!next;
  $('main-app').classList.toggle('voice-mode-on',next);
  $('voice-mode-toggle').setAttribute('aria-pressed',String(next));
  $('voice-mode-toggle').textContent=next?'✕ Encerrar voz':'✧ Voz';
  $('voice-mode-toggle').title=next?'Encerrar conversa por voz':'Ativar conversa por voz';
  if(!next){voiceRecognitionFailed=true;voiceAbortRecognition();stopAudio();$('voice-status').textContent='';$('voice-mode-explain').textContent='Pronta para ouvir.';voiceShowResume(false)}
- else{voiceRecognitionFailed=false;voiceShowResume(false);voiceStatus('Ativando microfone...');if(!rec){voicePause('Reconhecimento de voz não disponível neste navegador.');return}startSpeechInput(true)}
+ else{voiceRecognitionFailed=false;voiceShowResume(false);voiceStatus('Ativando microfone...');if(!rec){voicePause('Reconhecimento de voz não disponível neste navegador.');return}startSpeechInput(true);voiceStartIdleCountdown()}
 }
 $('voice-mode-toggle').addEventListener('click',()=>setVoiceMode(!voiceModeOn));
 $('voice-exit').addEventListener('click',()=>setVoiceMode(false));
 $('voice-talk').addEventListener('click',()=>{voiceSilenceRetries=0;startSpeechInput(true)});
 $('voice-send').addEventListener('click',()=>voiceSubmitDraft(true));
 $('voice-replay').addEventListener('click',()=>{if(!lastReply){voiceStatus('Ainda não há resposta para repetir.');return}clearVoiceTimer();voiceAbortRecognition();voiceClearDraft();void say(lastReply,true)});
-$('voice-stop').addEventListener('click',()=>{voiceShowStop(false);stopAudio();if(voiceModeOn){voiceStatus('Resposta interrompida. Retomando microfone...');scheduleVoiceResume(500)}else voiceStatus('Áudio interrompido.')});
+$('voice-stop').addEventListener('click',()=>{voiceShowStop(false);stopAudio();if(voiceModeOn){voiceStatus('Resposta interrompida. Retomando microfone...');scheduleVoiceResume(500);voiceStartIdleCountdown()}else voiceStatus('Áudio interrompido.')});
 // Limitamos tentativas automáticas sem nenhuma fala; pausas com texto são tratadas pelo temporizador.
 function scheduleVoiceResume(delay=550){
  if(!voiceModeOn||!uid||!rec||document.hidden)return;
@@ -313,7 +329,7 @@ async function say(text,manual=false){
  if(!manual&&(!voiceModeOn||!$('speak').checked))return;
  if(voiceLoading)return;
  const g=generation,turn=voiceSession;
- if(voiceModeOn){clearVoiceTimer();voiceAbortRecognition();voiceShowResume(false)}
+ if(voiceModeOn){clearVoiceTimer();clearVoiceIdleTimer();voiceAbortRecognition();voiceShowResume(false)}
  if(manual&&audio&&readyText===text){
   try{audio.currentTime=0;await audio.play();voiceShowStop(true);voiceStatus('🔊 ALIVI falando...')}
   catch{voicePause('Áudio bloqueado. Toque em Repetir para ouvir ou Retomar para continuar.')}return;
@@ -328,7 +344,7 @@ async function say(text,manual=false){
   const blob=await r.blob();
   if(g!==generation||epoch!==playbackEpoch||(voiceModeOn&&turn!==voiceSession)||(!manual&&!voiceModeOn))return;
   objectUrl=URL.createObjectURL(blob);audio=new Audio(objectUrl);readyText=text;
-  audio.onended=()=>{voiceShowStop(false);if(voiceModeOn&&turn===voiceSession){voiceStatus('🎙 Sua vez. Ouvindo...');scheduleVoiceResume(450)}else voiceStatus('')};
+  audio.onended=()=>{voiceShowStop(false);if(voiceModeOn&&turn===voiceSession){voiceStatus('🎙 Sua vez! Aguardo até 15 segundos para você continuar falando.');scheduleVoiceResume(450);voiceStartIdleCountdown()}else voiceStatus('')};
   audio.onerror=()=>{voiceShowStop(false);if(voiceModeOn)voicePause('Falha no áudio. Toque em Retomar para continuar.')};
   try{await audio.play();voiceShowStop(true);voiceStatus('🔊 ALIVI falando...')}
   catch{voiceShowStop(false);voicePause('Reprodução bloqueada pelo navegador. Toque em Repetir ou Retomar.')}
@@ -356,7 +372,7 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
-async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
+async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;if(voiceModeOn)clearVoiceIdleTimer();const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
 const fact=memoryFact(q);
 let directReply='';
 if(!fact){await syncManagement();if(g!==generation)return;directReply=reminderCommand(q)||extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lembrete cancelado|lembrete atualizado|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){await syncManagement();if(g!==generation)return;directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';}}
@@ -364,7 +380,7 @@ if(fact){try{memoryStatus=await storeMemory(fact,g);memory=await readMemories(10
 else if(!directReply&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q)){const rows=await readMemories(10000);directReply=rows.length?'Memórias salvas ('+rows.length+'):\n'+rows.map((r,i)=>(i+1)+'. '+r.memory_value).join('\n'):'Nenhuma memória salva.';}
 if(g!==generation)return;$('memory-status').textContent=memoryStatus;
 const uniqueMemory=contextualMemories(memory,q,history);
-let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation){$('chat-notice').textContent='Falha: '+e.message;if(voiceModeOn)voicePause('Falha na resposta. Toque em Retomar para tentar de novo.')}}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat()}}
+let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation){$('chat-notice').textContent='Falha: '+e.message;if(voiceModeOn)voicePause('Falha na resposta. Toque em Retomar para tentar de novo.')}}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat();if(voiceModeOn&&!voiceIdleTimer&&!voiceLoading&&!voiceDraftText()&&(!audio||audio.paused))voiceStartIdleCountdown()}}
 $('send').onclick=sendChat;$('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
 if(Recognition){
@@ -383,7 +399,7 @@ if(Recognition){
    const next=partial.trim();
    if(next&&next!==voiceCurrentTranscript){
     voiceCurrentTranscript=next;voiceRecognitionText=final.trim();voiceFinalTranscript=!!final.trim();
-    voiceLastInputTime=Date.now();voiceSilenceRetries=0;
+    voiceLastInputTime=Date.now();voiceSilenceRetries=0;clearVoiceIdleTimer();
     voiceUpdateDraft();voiceScheduleDraftSend();
     voiceStatus('🎙 Pode continuar. A ALIVI aguarda sua pausa para enviar.');
     if(isVoiceStop(voiceDraftText())||/\b(?:alivi[\s,]+)?(?:pode responder|responda agora|pode enviar)[.!?]?\s*$/iu.test(next))voiceSubmitDraft(true);
