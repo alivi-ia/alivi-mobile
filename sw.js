@@ -1,5 +1,5 @@
-const CACHE='alivi-mobile-v3.6.0';
-const FILES=['./','./index.html','./app.js','./app.js?v=3.6.0','./icon.svg','./manifest.webmanifest','./version.json'];
+const CACHE='alivi-mobile-v3.6.1';
+const FILES=['./','./index.html','./app.js','./app.js?v=3.6.1','./icon.svg','./manifest.webmanifest','./version.json'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('alivi-mobile-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',e=>{if(e.data?.type==='SKIP_WAITING')self.skipWaiting()});
@@ -7,14 +7,24 @@ self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.me
 
 self.addEventListener('notificationclick',e=>{e.notification.close();const url=new URL('./?page=alerts',self.registration.scope).href;e.waitUntil((async()=>{const all=await self.clients.matchAll({type:'window',includeUncontrolled:true});const c=all.find(x=>x.url.startsWith(self.registration.scope));if(c){await c.navigate(url);return c.focus()}return self.clients.openWindow(url)})())});
 
-// 3.6.0: notifications can be received when the PWA is not open.
-self.addEventListener('push',event=>{
-  event.waitUntil((async()=>{
-    let data={};try{data=event.data?.json()||{}}catch{}
-    const title=String(data.title||'ALIVI • Lembrete').slice(0,100);
-    const body=String(data.body||'Você tem um compromisso para conferir.').slice(0,220);
-    const tag=String(data.tag||'alivi-push');
-    const url=new URL('./?page=alerts',self.registration.scope).href;
-    await self.registration.showNotification(title,{body,tag,icon:'./icon.svg',badge:'./icon.svg',data:{url,page:'alerts'},renotify:false});
-  })());
+
+// Firebase Messaging usa este mesmo Service Worker (escopo /alivi-mobile/).
+// Recebemos SOMENTE mensagens com payload data para evitar duplicidade.
+importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js');
+firebase.initializeApp({
+ apiKey:'AIzaSyA-ZCZjAioKCSpN5HVEJjy_vvIWDpYYUrM',
+ authDomain:'alivi-ia.firebaseapp.com',
+ projectId:'alivi-ia',
+ messagingSenderId:'1020176262495',
+ appId:'1:1020176262495:web:ee55571390dbc2b67d02ea'
+});
+firebase.messaging().onBackgroundMessage(payload=>{
+ const data=payload.data||{};
+ const title=String(data.title||'ALIVI • Lembrete').slice(0,100);
+ const body=String(data.body||'Você tem um aviso para conferir.').slice(0,220);
+ return self.registration.showNotification(title,{
+  body, tag:String(data.tag||'alivi-fcm'),icon:'./icon.svg',badge:'./icon.svg',
+  data:{url:new URL('./?page=alerts',self.registration.scope).href,page:'alerts'}
+ });
 });

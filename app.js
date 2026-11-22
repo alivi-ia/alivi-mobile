@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.6.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.6.1',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -222,42 +222,103 @@ function reminderCommand(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').rep
 function reminderRows(now=new Date()){const today=reminderDay(now);return agenda.filter(x=>x.reminder&&!x.done&&x.time).flatMap(x=>{const day=x.daily?today:x.date;if(day<x.date||new Date(day+'T'+x.time)>now)return [];return [{key:'reminder:'+x.id+':'+day+':'+x.time,page:'agenda',category:'Lembrete',title:x.title,detail:agendaDateLabel(day)+' às '+x.time,urgent:true}];});}
 
 
-async function syncRemoteQuiet(quiet){if(!uid)return;const reg=await navigator.serviceWorker?.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(!sub)return;await db('alivi_push_subscriptions','PATCH','user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(sub.endpoint),{quiet:!!quiet})}
-
-// 3.6.0 — Web Push: the private VAPID key stays ONLY in the Supabase Edge Function secrets.
-const PUSH_URL=SB.replace('.supabase.co','.supabase.co')+'/functions/v1/alivi-push';
+// ALIVI 3.6.1 — Firebase Cloud Messaging (FCM), preservando a mesma conta Supabase.
+// As configurações de aplicativo Firebase e a chave Web Push são PÚBLICAS.
+ // Credenciais para envio ficam SOMENTE na Edge Function do Supabase.
+const FIREBASE_CONFIG={
+ apiKey:'AIzaSyA-ZCZjAioKCSpN5HVEJjy_vvIWDpYYUrM',
+ authDomain:'alivi-ia.firebaseapp.com',
+ projectId:'alivi-ia',
+ storageBucket:'alivi-ia.firebasestorage.app',
+ messagingSenderId:'1020176262495',
+ appId:'1:1020176262495:web:ee55571390dbc2b67d02ea'
+};
+const FIREBASE_VAPID='BJoT1JuBVbPqjAzpVDBeoHJR8mJdiMJKg7IGdDPW_rXS2vXYDHeRdgvXC_NNjw5Uz_eAgG4CGDRR3qiMmsUr6kI';
+const FCM_URL=SB+'/functions/v1/alivi-fcm';
+let fcmModules=null, fcmMessaging=null, fcmForegroundListener=false;
 function pushStatus(t){const el=$('push-status');if(el)el.textContent=t}
-function pushKeyBytes(b64){const b=b64.replace(/-/g,'+').replace(/_/g,'/');const binary=atob(b.padEnd(Math.ceil(b.length/4)*4,'='));return Uint8Array.from(binary,c=>c.charCodeAt(0))}
 function pushAvailable(){return !!(window.isSecureContext&&'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window)}
-async function pushRegistration(){const reg=await navigator.serviceWorker.ready;if(!reg?.pushManager)throw Error('Este navegador não permite Web Push. No iPhone, instale o aplicativo na tela inicial.');return reg}
+async function initFirebaseMessaging(){
+ if(fcmMessaging)return fcmMessaging;
+ if(!pushAvailable())throw Error('Notificações indisponíveis neste navegador. No iPhone, instale a ALIVI na tela de início.');
+ if(!fcmModules){
+  const [appMod,msgMod]=await Promise.all([
+   import('https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js'),
+   import('https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging.js')
+  ]);
+  fcmModules={appMod,msgMod};
+ }
+ const {appMod,msgMod}=fcmModules;
+ if(!(await msgMod.isSupported()))throw Error('Firebase Messaging não é compatível com este navegador.');
+ const instance=appMod.getApps().find(x=>x.name==='alivi-mobile')||appMod.initializeApp(FIREBASE_CONFIG,'alivi-mobile');
+ fcmMessaging=msgMod.getMessaging(instance);
+ if(!fcmForegroundListener){
+  msgMod.onMessage(fcmMessaging,async payload=>{
+   try{
+    const v=payload.data||{};
+    await showSystemNotice(String(v.title||'ALIVI • Lembrete'),String(v.body||'Você tem um aviso.'),String(v.tag||'alivi-fcm'));
+   }catch(e){pushStatus('Aviso recebido, mas não exibido: '+e.message)}
+  });
+  fcmForegroundListener=true;
+ }
+ return fcmMessaging;
+}
+async function fcmRegistration(){
+ const reg=await navigator.serviceWorker.ready;
+ if(!reg?.pushManager)throw Error('Serviço de notificações indisponível neste aparelho.');
+ return reg;
+}
+async function syncRemoteQuiet(quiet){
+ if(!uid)return;
+ try{
+  const token=localStorage.getItem('alivi-fcm-token:'+uid);
+  if(token)await db('alivi_fcm_tokens','PATCH','user_id=eq.'+encodeURIComponent(uid)+'&token=eq.'+encodeURIComponent(token),{quiet:!!quiet});
+ }catch(e){pushStatus('Não foi possível sincronizar Não incomodar: '+e.message)}
+}
 async function registerRemotePush(){
  if(!uid)throw Error('Entre na sua conta ALIVI primeiro.');
- if(!pushAvailable())throw Error('Web Push indisponível neste navegador ou nesta instalação.');
- const permission=await Notification.requestPermission();if(permission!=='granted')throw Error('Permissão de notificações não concedida.');
- const response=await fetch(PUSH_URL+'?action=public_key',{cache:'no-store'});
- const config=await response.json().catch(()=>({}));if(!response.ok||!config.publicKey)throw Error('Servidor remoto não configurado. Instale a função e a chave VAPID no Supabase.');
- const reg=await pushRegistration();let sub=await reg.pushManager.getSubscription();
- if(sub&&config.publicKey!==localStorage.getItem('alivi-vapid-public')){await sub.unsubscribe();sub=null}
- if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:pushKeyBytes(config.publicKey)});
- const value=sub.toJSON();if(!value.endpoint||!value.keys?.p256dh||!value.keys?.auth)throw Error('Inscrição push inválida.');
- await db('alivi_push_subscriptions','POST','on_conflict=user_id,endpoint',{user_id:uid,endpoint:value.endpoint,p256dh:value.keys.p256dh,auth_secret:value.keys.auth,quiet:!!noticePrefs().quiet,enabled:true},false,true);
- // Confirm existence to distinguish server persistence from local browser success.
- const rows=await db('alivi_push_subscriptions','GET','select=endpoint&user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(value.endpoint)+'&limit=1');
- if(!rows.length)throw Error('Não foi possível confirmar a inscrição remota no banco.');
- localStorage.setItem('alivi-vapid-public',config.publicKey);
- const p=noticePrefs();p.auto=true;storeNotice(p);renderAlerts();
- return 'Avisos remotos ativados neste aparelho. Faça o teste de envio remoto.';
+ if(!pushAvailable())throw Error('Web Push indisponível neste navegador.');
+ const permission=await Notification.requestPermission();
+ if(permission!=='granted')throw Error('Permissão de notificações não concedida.');
+ const reg=await fcmRegistration();
+ // Migração: desvincular assinatura antiga, assinada com chave de outro provedor.
+ const existing=await reg.pushManager.getSubscription();
+ if(existing&&localStorage.getItem('alivi-fcm-migrated')!=='yes'){
+  await existing.unsubscribe();
+  localStorage.setItem('alivi-fcm-migrated','yes');
+ }
+ const messaging=await initFirebaseMessaging();
+ const token=await fcmModules.msgMod.getToken(messaging,{vapidKey:FIREBASE_VAPID,serviceWorkerRegistration:reg});
+ if(!token)throw Error('O Firebase não retornou o token de notificações.');
+ const account=uid;
+ await db('alivi_fcm_tokens','POST','on_conflict=user_id,token',{
+  user_id:account,token,quiet:!!noticePrefs().quiet,enabled:true,updated_at:new Date().toISOString()
+ },false,true);
+ const rows=await db('alivi_fcm_tokens','GET','select=token&user_id=eq.'+encodeURIComponent(account)+'&token=eq.'+encodeURIComponent(token)+'&limit=1');
+ if(!rows.length)throw Error('O cadastro do aparelho não foi confirmado no banco.');
+ localStorage.setItem('alivi-fcm-token:'+account,token);
+ const prefs=noticePrefs();prefs.auto=true;storeNotice(prefs);renderAlerts();
+ return 'Avisos do Firebase ativados neste aparelho. Agora use Testar envio remoto.';
 }
-async function unregisterRemotePush(){const reg=await navigator.serviceWorker?.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(!sub)return 'Não havia inscrição remota neste aparelho.';if(uid)await db('alivi_push_subscriptions','DELETE','user_id=eq.'+encodeURIComponent(uid)+'&endpoint=eq.'+encodeURIComponent(sub.endpoint));await sub.unsubscribe();return 'Avisos remotos desativados neste aparelho.'}
+async function unregisterRemotePush(){
+ const account=uid;
+ if(!account)return 'Entre na sua conta ALIVI.';
+ const token=localStorage.getItem('alivi-fcm-token:'+account);
+ if(token){await db('alivi_fcm_tokens','DELETE','user_id=eq.'+encodeURIComponent(account)+'&token=eq.'+encodeURIComponent(token));localStorage.removeItem('alivi-fcm-token:'+account)}
+ try{const messaging=await initFirebaseMessaging();await fcmModules.msgMod.deleteToken(messaging)}catch(e){if(!token)throw e}
+ return 'Avisos remotos desativados neste aparelho.';
+}
 async function remotePushTest(){
- const token=await getToken();if(!token)throw Error('Entre na sua conta.');
- const response=await fetch(PUSH_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({action:'test'})});
- const result=await response.json().catch(()=>({}));if(!response.ok)throw Error(result.error||result.message||('HTTP '+response.status));
- if(!result.sent)throw Error('Nenhum aparelho recebeu o envio remoto. Ative os avisos remotos primeiro.');
- return 'Teste remoto enviado a '+result.sent+' aparelho(s). Confira a barra de notificações.';
+ if(!uid)throw Error('Entre na sua conta ALIVI.');
+ const token=await getToken();if(!token)throw Error('Sua sessão expirou. Entre novamente.');
+ const response=await fetch(FCM_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({action:'test'})});
+ const result=await response.json().catch(()=>({}));
+ if(!response.ok)throw Error(result.error||result.message||('Erro HTTP '+response.status));
+ if(!result.sent)throw Error(result.error||('Nenhum envio confirmado. Falhas: '+(result.failed??0)+'. Verifique as credenciais do Firebase no Supabase.'));
+ return 'Firebase aceitou '+result.sent+' envio(s). Confira a barra do celular. A entrega ainda precisa ser verificada.';
 }
-$('push-enable').onclick=async()=>{const b=$('push-enable');b.disabled=true;pushStatus('Ativando avisos remotos...');try{pushStatus(await registerRemotePush())}catch(e){pushStatus('Não foi possível ativar: '+e.message)}finally{b.disabled=false}};
+$('push-enable').onclick=async()=>{const b=$('push-enable');b.disabled=true;pushStatus('Ativando o Firebase no aparelho...');try{pushStatus(await registerRemotePush())}catch(e){pushStatus('Não foi possível ativar: '+e.message)}finally{b.disabled=false}};
 $('push-disable').onclick=async()=>{const b=$('push-disable');b.disabled=true;try{pushStatus(await unregisterRemotePush())}catch(e){pushStatus('Não foi possível desativar: '+e.message)}finally{b.disabled=false}};
-$('push-test').onclick=async()=>{const b=$('push-test');b.disabled=true;pushStatus('Enviando teste remoto...');try{pushStatus(await remotePushTest())}catch(e){pushStatus('Teste remoto falhou: '+e.message)}finally{b.disabled=false}};
+$('push-test').onclick=async()=>{const b=$('push-test');b.disabled=true;pushStatus('Solicitando teste ao Firebase...');try{pushStatus(await remotePushTest())}catch(e){pushStatus('Teste remoto falhou: '+e.message)}finally{b.disabled=false}};
 
 restore();
