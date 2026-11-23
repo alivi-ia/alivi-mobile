@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.5',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.6',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -372,15 +372,95 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
-async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){if(voiceModeOn)setVoiceMode(false);$('message').value='';go('feedback');await loadFeedbackMine();return;}if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;if(voiceModeOn)clearVoiceIdleTimer();const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
-const fact=memoryFact(q);
-let directReply='';
-if(!fact){await syncManagement();if(g!==generation)return;directReply=reminderCommand(q)||extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lembrete cancelado|lembrete atualizado|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){await syncManagement();if(g!==generation)return;directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';}}
-if(fact){try{memoryStatus=await storeMemory(fact,g);memory=await readMemories(10000);directReply=memoryStatus+' Informação: '+fact;}catch(e){memoryStatus='Memória não salva: '+e.message;directReply=memoryStatus;}}
-else if(!directReply&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q)){const rows=await readMemories(10000);directReply=rows.length?'Memórias salvas ('+rows.length+'):\n'+rows.map((r,i)=>(i+1)+'. '+r.memory_value).join('\n'):'Nenhuma memória salva.';}
-if(g!==generation)return;$('memory-status').textContent=memoryStatus;
-const uniqueMemory=contextualMemories(memory,q,history);
-let data;if(directReply){data={reply:directReply,searched:false}}else{const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});data=await r.json();if(!r.ok||!data.reply)throw Error(data.detail||'HTTP '+r.status);}if(g!==generation)return;const answer=stamp({role:'assistant',text:data.reply});await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at});if(g!==generation)return;associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();$('chat-notice').textContent=data.searched?'Pesquisa realizada.':'Resposta concluída.';if(voiceModeOn)void say(answer.text,false);if(!directReply)suggestPreference(q,memory)}catch(e){if(g===generation){$('chat-notice').textContent='Falha: '+e.message;if(voiceModeOn)voicePause('Falha na resposta. Toque em Retomar para tentar de novo.')}}finally{busy=false;$('send').disabled=false;if(g===generation)syncChat();if(voiceModeOn&&!voiceIdleTimer&&!voiceLoading&&!voiceDraftText()&&(!audio||audio.paused))voiceStartIdleCountdown()}}
+async function sendChat(){
+ const q=$('message').value.trim();
+ if(!q||busy||syncing||!uid)return;
+ if(/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){
+  if(voiceModeOn)setVoiceMode(false);
+  $('message').value='';go('feedback');await loadFeedbackMine();return;
+ }
+ if(voiceModeOn&&voiceDraftText()){
+  clearVoiceDraftTimer();voiceRequested=false;
+  try{if(rec)rec.abort()}catch{}
+  voiceClearDraft();
+ }
+ busy=true;if(voiceModeOn)clearVoiceIdleTimer();
+ const g=generation;
+ const isReminder=isReminderIntent(q);
+ $('send').disabled=true;$('chat-notice').textContent=isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
+ let questionRecorded=false;
+ try{
+  const token=await getToken();if(!token)throw Error('Sua sessão expirou. Entre novamente.');
+  if(g!==generation)return;
+  const project=activeProject;
+  const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));
+  // Um lembrete local não depende da disponibilidade da API de IA/memória.
+  let memory=isReminder?[]:await readMemories(10000);
+  if(g!==generation)return;
+  const user=stamp({role:'user',text:q});
+  try{
+   await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});
+  }catch(e){if(!isReminder)throw e;}
+  if(g!==generation)return;
+  $('message').value='';
+  associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();questionRecorded=true;
+  let memoryStatus='',directReply='';
+  const fact=isReminder?'':memoryFact(q);
+  if(isReminder){
+   await syncManagement();
+   if(g!==generation)return;
+   directReply=await reminderCommand(q);
+   if(!directReply)directReply='Não consegui entender o pedido de lembrete. Diga: “Me avise de beber água daqui a 5 minutos”.';
+  }else if(!fact){
+   await syncManagement();
+   if(g!==generation)return;
+   directReply=extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);
+   if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){
+    await syncManagement();
+    if(g!==generation)return;
+    directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');
+    if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';
+   }
+  }
+  if(fact){
+   try{memoryStatus=await storeMemory(fact,g);memory=await readMemories(10000);directReply=memoryStatus+' Informação: '+fact;}
+   catch(e){memoryStatus='Memória não salva: '+e.message;directReply=memoryStatus;}
+  }else if(!isReminder&&!directReply&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q)){
+   const rows=await readMemories(10000);
+   directReply=rows.length?'Memórias salvas ('+rows.length+'):\n'+rows.map((r,i)=>(i+1)+'. '+r.memory_value).join('\n'):'Nenhuma memória salva.';
+  }
+  if(g!==generation)return;
+  $('memory-status').textContent=memoryStatus;
+  let data;
+  if(directReply)data={reply:directReply,searched:false};
+  else{
+   const uniqueMemory=contextualMemories(memory,q,history);
+   const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});
+   data=await r.json().catch(()=>({}));
+   if(!r.ok||!data.reply){const detail=typeof data.detail==='string'?data.detail:typeof data.message==='string'?data.message:'Serviço de IA temporariamente indisponível';throw Error(detail+' (HTTP '+r.status+').');}
+  }
+  if(g!==generation)return;
+  const answer=stamp({role:'assistant',text:data.reply});
+  let answerSynced=true;
+  try{await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at})}
+  catch(e){answerSynced=false;}
+  if(g!==generation)return;
+  associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();
+  $('chat-notice').textContent=answerSynced?(data.searched?'Pesquisa realizada.':'Resposta concluída.'):'Resposta exibida; histórico ainda não sincronizado.';
+  if(voiceModeOn)void say(answer.text,false);
+  if(!directReply)suggestPreference(q,memory);
+ }catch(e){
+  if(g===generation){
+   $('chat-notice').textContent='Falha: '+e.message+' Confira a conexão e tente novamente.';
+   if(!questionRecorded&&!$('message').value.trim())$('message').value=q;
+   if(voiceModeOn)voicePause('Houve uma falha. Confira a mensagem na tela e toque em Retomar para continuar.');
+  }
+ }finally{
+  busy=false;$('send').disabled=false;
+  if(g===generation)syncChat();
+  if(voiceModeOn&&!voiceIdleTimer&&!voiceLoading&&!voiceDraftText()&&(!audio||audio.paused))voiceStartIdleCountdown();
+ }
+}
 $('send').onclick=sendChat;$('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
 if(Recognition){
@@ -598,24 +678,127 @@ function extendedManagement(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').
 }
 
 
-// Lembretes explícitos: usam a agenda sincronizada, sem novos tipos no banco.
-function reminderTime(text,now=new Date()){
- const daily=/\b(?:todos os dias|diariamente|todo dia)\b/iu.test(text);
- let rest=text.replace(/\b(?:todos os dias|diariamente|todo dia)\b/iu,' ').trim();
- const rel=rest.match(/\bdaqui a\s+(\d+)\s*(minutos?|horas?)\b/iu);
- if(rel){if(daily)return {error:'Para lembrete diário, informe um horário fixo.'};const n=Number(rel[1]);if(n<1||n>10080)return {error:'Informe um intervalo válido.'};const d=new Date(now.getTime()+n*(/hora/iu.test(rel[2])?3600000:60000));d.setSeconds(0,0);if(d<=now)d.setMinutes(d.getMinutes()+1);return {date:reminderDay(d),time:reminderClock(d),title:cleanReminder(rest.replace(rel[0],' ')),daily:false};}
- const v=agendaTimeDate(rest);if(v.error)return v;if(!v.time)return {error:'Informe o horário do lembrete.'};if(!v.date){v.date=reminderDay(now);if(new Date(v.date+'T'+v.time)<=now){if(!daily)return {error:'Esse horário de hoje já passou. Informe amanhã ou outra data.'};const d=new Date(now);d.setDate(d.getDate()+1);v.date=reminderDay(d);}}
- if(new Date(v.date+'T'+v.time)<=now)return {error:'Informe uma data e horário futuros.'};return {...v,title:cleanReminder(v.title),daily};
+// 3.10.6 — Comandos de lembrete por voz e confirmações reais de armazenamento.
+function isReminderIntent(q){
+ const t=agendaNorm(q).replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/,'').replace(/^(?:o|a)\s+/,'').trim();
+ if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes\b/.test(t))return true;
+ if(/^(?:cancele|cancelar|reagende|remarque)\s+(?:o\s+)?lembrete\b/.test(t))return true;
+ if(/^(?:me\s+(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)|(?:avise|avisa|lembre|lembra|notifique|notifica)-me|(?:crie|cadastre|agende)\s+(?:um\s+)?lembrete)\b/.test(t))return true;
+ if(/^(?:agenda|agende|agendar|marque|programa|programe|programar)\b/.test(t)&&/\b(?:avis\w*|lembr\w*|notific\w*|lembrete)\b/.test(t))return true;
+ if(/^(?:quero|preciso|pode|por favor|gostaria|voce|você)\b/.test(t)&&/\b(?:avis\w*|lembr\w*|notific\w*)\b/.test(t))return true;
+ return false;
 }
 function reminderDay(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function reminderClock(d){return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
-function cleanReminder(t){return t.replace(/^\s*(?:de|para|que)\s+/iu,'').replace(/\s+(?:de|para)\s*$/iu,'').replace(/\s+/g,' ').trim().replace(/[.!?]+$/,'')}
-function reminderCommand(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').replace(/[.!?]+$/,'');let m;
- if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes$/iu.test(t)){const rows=agenda.filter(x=>x.reminder&&!x.done);return rows.length?'Lembretes:\n'+rows.map(x=>x.title+' — '+(x.daily?'Todos os dias, a partir de ':'')+agendaDateLabel(x.date)+' às '+x.time).join('\n'):'Nenhum lembrete ativo.'}
- if((m=t.match(/^cancel(?:e|ar)\s+(?:o\s+)?lembrete\s*[: -]?\s+(.+)$/iu))){const rows=agenda.filter(x=>x.reminder&&!x.done&&agendaNorm(x.title)===agendaNorm(m[1]));if(rows.length!==1)return 'Informe o título exato de um único lembrete ativo.';return saveAgenda(agenda.filter(x=>x.id!==rows[0].id))?'Lembrete cancelado: '+rows[0].title+'.':'Não consegui cancelar o lembrete.';}
- if((m=t.match(/^(?:reagende|remarque)\s+(?:o\s+)?lembrete\s*[: -]?\s+(.+)$/iu))){const v=reminderTime(m[1]);if(v.error)return v.error;const rows=agenda.filter(x=>x.reminder&&!x.done&&agendaNorm(x.title)===agendaNorm(v.title));if(rows.length!==1)return 'Informe o título exato do lembrete e seu novo horário.';const next={...rows[0],date:v.date,time:v.time,daily:v.daily||rows[0].daily};return saveAgenda(agenda.map(x=>x.id===next.id?next:x))?'Lembrete atualizado: '+next.title+' — '+agendaDateLabel(next.date)+' às '+next.time+'.':'Não consegui atualizar o lembrete.';}
- if((m=t.match(/^(?:me lembre|lembre-me|me avise|avise-me|me notifique|notifique-me|(?:crie|cadastre|agende)\s+(?:um\s+)?lembrete)\s*[: -]?\s+(.+)$/iu))){const v=reminderTime(m[1]);if(v.error)return v.error;const task={id:crypto.randomUUID(),title:v.title,date:v.date,time:v.time,done:false,reminder:true,daily:v.daily};if(!validTask(task))return 'Informe o assunto, a data e a hora do lembrete.';if(agenda.some(x=>x.reminder&&!x.done&&x.date===task.date&&x.time===task.time&&x.daily===task.daily&&agendaNorm(x.title)===agendaNorm(task.title)))return 'Esse lembrete já existe.';return saveAgenda([...agenda,task])?'Registrado: lembrete de '+task.title+' — '+(task.daily?'diariamente, a partir de ':'')+agendaDateLabel(task.date)+' às '+task.time+'. Para avisos com a ALIVI fechada, mantenha as notificações Firebase ativadas no aparelho.':'Não consegui salvar o lembrete.';}
- return '';
+function cleanReminder(t){
+ let s=String(t||'').trim();
+ for(let i=0;i<8;i++){
+  const next=s.replace(/^(?:alivi[,!:]?\s*|(?:eu\s+)?(?:quero|gostaria|preciso|pode|por favor)\s+(?:que\s+)?|(?:você|voce)\s+|(?:o\s+)?(?:agenda|agende|agendar|marque|programa|programe|programar)\s+|(?:para|pra)\s+(?:mim|você|voce|me)\s+|(?:me\s+)?(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)(?:-me)?\s+|(?:crie|cadastre|agende)\s+(?:um\s+)?lembrete\s+|(?:um\s+)?lembrete\s+|(?:de|para|que|sobre)\s+)/iu,'').trim();
+  if(next===s)break;s=next;
+ }
+ return s.replace(/^[\s:,-]+|[\s.,!?-]+$/g,'').replace(/\s+/g,' ').trim();
+}
+function reminderTime(text,now=new Date()){
+ let rest=String(text||'').trim();
+ const daily=/\b(?:todos os dias|diariamente|todo dia)\b/iu.test(rest);
+ rest=rest.replace(/\b(?:todos os dias|diariamente|todo dia)\b/iu,' ').trim();
+ const rel=rest.match(/\bdaqui\s+a?\s*(\d{1,5})\s*(minutos?|horas?)\b/iu);
+ if(rel){
+  if(daily)return {error:'Para lembrete diário, informe um horário fixo.'};
+  const n=Number(rel[1]);if(!Number.isInteger(n)||n<1||n>10080)return {error:'Informe um intervalo entre 1 minuto e 7 dias.'};
+  const dueMs=now.getTime()+n*(/hora/iu.test(rel[2])?3600000:60000);
+  const due=new Date(Math.ceil(dueMs/60000)*60000);
+  const title=cleanReminder(rest.replace(rel[0],' '));
+  if(!title)return {error:'Informe também o assunto do lembrete.'};
+  return {date:reminderDay(due),time:reminderClock(due),title,daily:false};
+ }
+ // Horários falados: “às 5 horas da tarde”, “às 17h”, “8h30”, “amanhã às 9”.
+ const dateMatch=rest.match(/(?:^|\s)(hoje|amanh[ãa]|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{4})?)(?=\s|[.,!?;:]|$)/iu);
+ let day='';
+ if(dateMatch){
+  const v=agendaNorm(dateMatch[1]);
+  if(v==='hoje')day=reminderDay(now);
+  else if(v==='amanha'){const d=new Date(now);d.setDate(d.getDate()+1);day=reminderDay(d)}
+  else if(v.includes('/')){const [d,m,y]=v.split('/');day=(y||String(now.getFullYear()))+'-'+m.padStart(2,'0')+'-'+d.padStart(2,'0')}
+  else day=v;
+  rest=rest.replace(dateMatch[0],' ').trim();
+ }
+ const clock=rest.match(/(?:^|\s)[àa]s?\s+(\d{1,2})(?:[:h](\d{1,2}))?\s*(?:horas?|h)?(?:\s+e\s+(\d{1,2})\s*minutos?)?(?:\s+(?:da|de)\s+(manh[ãa]|tarde|noite))?(?=\s|[.,!?;:]|$)/iu)
+  ||rest.match(/\b(\d{1,2})h(\d{1,2})?(?:\s+(?:da|de)\s+(manh[ãa]|tarde|noite))?\b/iu)
+  ||rest.match(/\b(\d{1,2})\s+horas?(?:\s+(?:da|de)\s+(manh[ãa]|tarde|noite))?\b/iu);
+ if(!clock)return {error:'Não agendei. Informe o horário, por exemplo: “Me avise hoje às 19 horas de estudar”.'};
+ let hour=Number(clock[1]);
+ // Se o horário tiver grupo de minuto por "e X minutos", ele é o terceiro grupo.
+ const minute=clock[3]&&/\se\s\d+/iu.test(clock[0])?Number(clock[3]):Number(clock[2]||0);
+ // Padrão sem grupo de minutos ("8h30") usa grupo 2; grupo 3 pode ser o período.
+ let suffix='';const pm=clock[0].match(/\b(?:da|de)\s+(manh[ãa]|tarde|noite)/iu);if(pm)suffix=agendaNorm(pm[1]);
+ if(hour>23||minute>59)return {error:'Não agendei: horário inválido.'};
+ if(suffix==='tarde'&&hour>=1&&hour<12)hour+=12;
+ else if(suffix==='noite'&&hour>=1&&hour<=11)hour+=12;
+ else if(suffix==='manha'&&hour===12)hour=0;
+ if(hour>23)return {error:'Não agendei: horário inválido.'};
+ const time=String(hour).padStart(2,'0')+':'+String(minute).padStart(2,'0');
+ rest=rest.replace(clock[0],' ').trim();
+ if(day&&!validDay(day))return {error:'Não agendei: data inválida.'};
+ if(!day)day=reminderDay(now);
+ const due=new Date(day+'T'+time+':00');
+ if(due<=now){
+  if(!dateMatch&&daily){due.setDate(due.getDate()+1);day=reminderDay(due)}
+  else return {error:'Não agendei: esse horário já passou. Informe outro horário ou dia.'};
+ }
+ const title=cleanReminder(rest);
+ if(!title)return {error:'Não agendei: informe também o assunto do lembrete.'};
+ return {date:day,time,title,daily};
+}
+function reminderCloudAdvice(){
+ const enabled=typeof Notification!=='undefined'&&Notification.permission==='granted'&&!!localStorage.getItem('alivi-fcm-token:'+uid);
+ return enabled?'Há um cadastro local do Firebase neste aparelho, mas a entrega no horário depende de confirmação do serviço remoto.':'Para receber com a ALIVI fechada, ative e teste o Firebase em Notificações.';
+}
+async function confirmReminderRemote(task){
+ const key='agenda:'+task.id;
+ try{
+  await syncManagement();
+  if(pending[key])await syncManagement();
+  if(pending[key])return false;
+  const rows=await db('alivi_management','GET','select=payload,deleted&user_id=eq.'+encodeURIComponent(uid)+'&kind=eq.agenda&record_id=eq.'+encodeURIComponent(task.id)+'&limit=1');
+  const row=rows?.[0];
+  return !!(row&&!row.deleted&&row.payload?.id===task.id&&row.payload?.title===task.title&&row.payload?.date===task.date&&row.payload?.time===task.time&&row.payload?.reminder===true);
+ }catch(e){return false}
+}
+async function reminderCommand(q){
+ const t=q.trim().replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/iu,'').replace(/[.!?]+$/,'');let m;
+ if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes$/iu.test(t)){
+  await syncManagement();
+  const rows=agenda.filter(x=>x.reminder&&!x.done);
+  return rows.length?'Lembretes registrados:\n'+rows.map(x=>x.title+' — '+(x.daily?'Todos os dias, a partir de ':'')+agendaDateLabel(x.date)+' às '+x.time).join('\n'):'Nenhum lembrete ativo registrado.';
+ }
+ if((m=t.match(/^cancel(?:e|ar)\s+(?:o\s+)?lembrete\s*[: -]?\s*(.+)$/iu))){
+  const rows=agenda.filter(x=>x.reminder&&!x.done&&agendaNorm(x.title)===agendaNorm(m[1]));
+  if(rows.length!==1)return 'Informe o título exato de um único lembrete ativo.';
+  if(!saveAgenda(agenda.filter(x=>x.id!==rows[0].id)))return 'Não consegui cancelar o lembrete.';
+  await syncManagement();
+  return pending['agenda:'+rows[0].id]?'Cancelamento salvo neste aparelho, aguardando sincronização.':'Cancelamento enviado à sincronização. Confira em Notificações.';
+ }
+ if((m=t.match(/^(?:reagende|remarque)\s+(?:o\s+)?lembrete\s*[: -]?\s*(.+)$/iu))){
+  const v=reminderTime(m[1]);if(v.error)return v.error;
+  const rows=agenda.filter(x=>x.reminder&&!x.done&&agendaNorm(x.title)===agendaNorm(v.title));
+  if(rows.length!==1)return 'Informe o título exato do lembrete e seu novo horário.';
+  const task={...rows[0],date:v.date,time:v.time,daily:v.daily||rows[0].daily};
+  if(!saveAgenda(agenda.map(x=>x.id===task.id?task:x)))return 'Não consegui salvar a alteração.';
+  return await confirmReminderRemote(task)?'Lembrete atualizado e confirmado no banco: '+task.title+' — '+agendaDateLabel(task.date)+' às '+task.time+'.':'Alteração salva neste aparelho, mas ainda sem confirmação do banco. Confira a sincronização em Notificações.';
+ }
+ const v=reminderTime(t);
+ if(v.error)return v.error;
+ const duplicate=agenda.find(x=>x.reminder&&!x.done&&x.date===v.date&&x.time===v.time&&x.daily===v.daily&&agendaNorm(x.title)===agendaNorm(v.title));
+ if(duplicate){
+  return await confirmReminderRemote(duplicate)?'Esse lembrete já existe e está confirmado no banco: '+duplicate.title+' — '+agendaDateLabel(duplicate.date)+' às '+duplicate.time+'. '+reminderCloudAdvice():'Esse lembrete já existe neste aparelho, mas a confirmação do banco está pendente. Abra Notificações para verificar.';
+ }
+ const task={id:crypto.randomUUID(),title:v.title,date:v.date,time:v.time,done:false,reminder:true,daily:v.daily};
+ if(!validTask(task))return 'Não consegui cadastrar: confira o assunto, a data e a hora.';
+ if(!saveAgenda([...agenda,task]))return 'Não consegui salvar o lembrete.';
+ const saved=await confirmReminderRemote(task);
+ const label=task.title+' — '+(task.daily?'diariamente, a partir de ':'')+agendaDateLabel(task.date)+' às '+task.time+'.';
+ return saved?'Lembrete salvo e confirmado no banco: '+label+' '+reminderCloudAdvice():'Lembrete salvo apenas neste aparelho: '+label+' A sincronização com o banco não foi confirmada. Não posso garantir notificação com o aplicativo fechado. Confira em Notificações.';
 }
 function reminderRows(now=new Date()){const today=reminderDay(now);return agenda.filter(x=>x.reminder&&!x.done&&x.time).flatMap(x=>{const day=x.daily?today:x.date;if(day<x.date||new Date(day+'T'+x.time)>now)return [];return [{key:'reminder:'+x.id+':'+day+':'+x.time,page:'agenda',category:'Lembrete',title:x.title,detail:agendaDateLabel(day)+' às '+x.time,urgent:true}];});}
 
