@@ -1,11 +1,11 @@
 'use strict';
-const VERSION='3.10.4.1',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.5',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
 function render(){const target=$('notes');target.replaceChildren();if(!notes.length){const e=document.createElement('div');e.className='empty';e.textContent='Nenhuma nota ainda.';target.append(e)}notes.forEach((n,i)=>{const d=document.createElement('div');d.className='item';const b=document.createElement('b');b.textContent=n.title;const t=document.createElement('p');t.textContent=n.content;const s=document.createElement('small');s.textContent=n.date;const del=document.createElement('button');del.className='secondary';del.textContent='Excluir';del.onclick=()=>{if(confirm('Excluir esta nota?')){notes.splice(i,1);persist()}};d.append(b,t,s,del);target.append(d)})}
 function persist(){localStorage.setItem(KEY+':'+uid,JSON.stringify(notes));render()}
-function go(page){if(page!=='home'&&voiceModeOn)setVoiceMode(false);document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts')renderAlerts()}
+function go(page){if(page!=='home'&&voiceModeOn)setVoiceMode(false);document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts')renderAlerts();if(page==='feedback')loadFeedbackMine()}
 document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
 $('alert-badge').onclick=()=>go('alerts');
 $('dots').onclick=()=>{const m=$('menu');m.hidden=!m.hidden;$('dots').setAttribute('aria-expanded',String(!m.hidden))};document.addEventListener('click',e=>{if(!e.target.closest('.menu-wrap')){$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false')}});
@@ -319,7 +319,7 @@ async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+p
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
 async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
@@ -372,7 +372,7 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
-async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;if(voiceModeOn)clearVoiceIdleTimer();const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
+async function sendChat(){const q=$('message').value.trim();if(!q||busy||syncing||!uid)return;if(/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){if(voiceModeOn)setVoiceMode(false);$('message').value='';go('feedback');await loadFeedbackMine();return;}if(voiceModeOn&&voiceDraftText()){clearVoiceDraftTimer();voiceRequested=false;try{if(rec)rec.abort()}catch{}voiceClearDraft()}busy=true;if(voiceModeOn)clearVoiceIdleTimer();const g=generation;$('send').disabled=true;$('chat-notice').textContent='Consultando ALIVI...';try{const token=await getToken();if(!token||g!==generation)return;const project=activeProject;const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));let memory=await readMemories(10000);if(g!==generation)return;const user=stamp({role:'user',text:q});await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});if(g!==generation)return;$('message').value='';associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();let memoryStatus='';
 const fact=memoryFact(q);
 let directReply='';
 if(!fact){await syncManagement();if(g!==generation)return;directReply=reminderCommand(q)||extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);if(directReply&&/^(?:registrado|compromisso atualizado|tarefa concluída|lembrete cancelado|lembrete atualizado|lançamento atualizado|conta registrada|conta liquidada)/iu.test(directReply)){await syncManagement();if(g!==generation)return;directReply=directReply.replace('Registrado neste aparelho:','Registrado:').replace('Registrado na agenda:','Registrado:').replace(' Sincronização pendente até confirmação no painel de alertas.','');if(Object.keys(pending).length)directReply+=' (Envio pendente; confira em Alertas.)';}}
@@ -720,3 +720,57 @@ $('push-disable').onclick=async()=>{const b=$('push-disable');b.disabled=true;tr
 $('push-test').onclick=async()=>{const b=$('push-test');b.disabled=true;pushStatus('Solicitando teste ao Firebase...');try{pushStatus(await remotePushTest())}catch(e){pushStatus('Teste remoto falhou: '+e.message)}finally{b.disabled=false}};
 
 restore();
+
+
+// ALIVI FEEDBACK 3.10.5: envio EXPLÍCITO; não envia histórico nem memórias.
+const feedbackLabels={suggestion:'Sugestão',bug:'Problema',feature:'Nova função',other:'Outro'};
+const feedbackStatuses={received:'Recebido',reviewing:'Em análise',planned:'Planejado',resolved:'Resolvido',closed:'Encerrado'};
+let feedbackBusy=false,feedbackRec=null;
+function feedbackInfo(text){$('feedback-status').textContent=text}
+function feedbackRow(entry){
+ const d=document.createElement('div');d.className='item';
+ const tag=document.createElement('span');tag.className='feedback-tag';tag.textContent=(feedbackLabels[entry.category]||'Mensagem')+' • '+(feedbackStatuses[entry.status]||entry.status);
+ const date=document.createElement('small');date.textContent=new Date(entry.created_at).toLocaleString('pt-BR');
+ const p=document.createElement('p');p.textContent=entry.body;
+ d.append(tag,date,p);
+ if(entry.owner_reply){const reply=document.createElement('p');reply.textContent='Equipe ALIVI: '+entry.owner_reply;d.append(reply)}
+ return d;
+}
+async function loadFeedbackMine(){
+ if(!uid)return;
+ const user=uid;
+ const list=$('feedback-list');list.textContent='Consultando suas mensagens...';
+ try{const token=await getToken();if(uid!==user)return;
+ const url=SB+'/rest/v1/alivi_feedback_messages?select=id,category,body,app_version,status,owner_reply,created_at&user_id=eq.'+encodeURIComponent(user)+'&order=created_at.desc&limit=15';
+ const r=await fetch(url,{headers:{apikey:PUB,Authorization:'Bearer '+token},cache:'no-store'});
+ const rows=await r.json().catch(()=>[]);if(!r.ok)throw Error(rows.message||'HTTP '+r.status);
+ if(uid!==user)return;list.replaceChildren();if(!rows.length){const p=document.createElement('p');p.className='hint';p.textContent='Nenhum feedback enviado ainda.';list.append(p)}
+ for(const row of rows)list.append(feedbackRow(row));
+ }catch(e){if(uid===user)list.textContent='Não foi possível carregar. '+e.message}
+}
+$('feedback-refresh').addEventListener('click',loadFeedbackMine);
+$('feedback-form').addEventListener('submit',async ev=>{
+ ev.preventDefault();if(!uid||feedbackBusy)return;
+ const text=$('feedback-body').value.trim();if(text.length<3||text.length>1800){feedbackInfo('Digite entre 3 e 1800 caracteres.');return}
+ if(!window.confirm('Enviar esta mensagem para a equipe ALIVI? Apenas o texto deste formulário será compartilhado.'))return;
+ feedbackBusy=true;$('feedback-send').disabled=true;feedbackInfo('Enviando à equipe ALIVI...');
+ const who=uid;
+ try{const token=await getToken();if(!token||uid!==who)throw Error('Entre novamente para enviar.');
+ const r=await fetch(SB+'/rest/v1/alivi_feedback_messages',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+token,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({user_id:who,category:$('feedback-category').value,body:text,app_version:VERSION})});
+ if(!r.ok){const e=await r.json().catch(()=>({}));throw Error(e.message||'HTTP '+r.status)}
+ if(uid===who){$('feedback-body').value='';feedbackInfo('Mensagem enviada e registrada. Obrigado por ajudar a ALIVI!');await loadFeedbackMine()}
+ }catch(e){feedbackInfo('Não foi possível enviar: '+e.message)}finally{feedbackBusy=false;$('feedback-send').disabled=false}
+});
+const FeedbackRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+$('feedback-dictate').addEventListener('click',()=>{
+ if(!FeedbackRecognition){feedbackInfo('Ditado não disponível neste navegador. Escreva sua mensagem.');return}
+ if(feedbackRec){feedbackRec.stop();return}
+ if(voiceModeOn)setVoiceMode(false);
+ const rec=new FeedbackRecognition();feedbackRec=rec;rec.lang='pt-BR';rec.interimResults=true;rec.continuous=false;
+ const previous=$('feedback-body').value.trim();let words='';
+ $('feedback-dictate').textContent='■ Parar ditado';feedbackInfo('🎙 Ouvindo. Sua fala será escrita, mas não enviada automaticamente.');
+ rec.onresult=e=>{let s='';for(let i=0;i<e.results.length;i++)s+=(e.results[i][0]?.transcript||'')+' ';words=s.trim();$('feedback-body').value=(previous+' '+words).trim()};
+ rec.onerror=e=>feedbackInfo('Microfone: '+(e.error||'indisponível'));
+ rec.onend=()=>{feedbackRec=null;$('feedback-dictate').textContent='🎙 Ditar mensagem';if(words)feedbackInfo('Texto registrado. Revise e clique em Enviar à equipe.')};
+ try{rec.start()}catch(e){feedbackRec=null;$('feedback-dictate').textContent='🎙 Ditar mensagem';feedbackInfo('Não foi possível iniciar o microfone: '+e.message)}
+});
