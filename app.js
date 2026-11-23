@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.6',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.7',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -678,7 +678,7 @@ function extendedManagement(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').
 }
 
 
-// 3.10.6 — Comandos de lembrete por voz e confirmações reais de armazenamento.
+// 3.10.7 — Intervalos falados e confirmação de lembrete sem detalhes técnicos.
 function isReminderIntent(q){
  const t=agendaNorm(q).replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/,'').replace(/^(?:o|a)\s+/,'').trim();
  if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes\b/.test(t))return true;
@@ -702,15 +702,20 @@ function reminderTime(text,now=new Date()){
  let rest=String(text||'').trim();
  const daily=/\b(?:todos os dias|diariamente|todo dia)\b/iu.test(rest);
  rest=rest.replace(/\b(?:todos os dias|diariamente|todo dia)\b/iu,' ').trim();
- const rel=rest.match(/\bdaqui\s+a?\s*(\d{1,5})\s*(minutos?|horas?)\b/iu);
+ // Aceita minutos numéricos ou falados: daqui um minuto, daqui a dois, em 3 minutos.
+ const rel=rest.match(/\b(?:daqui(?:\s+a)?|em)\s+(\d{1,5}|[a-zà-ÿ]+)\s+(minutos?|minutinhos?|mins?|horas?|h)\b/iu);
  if(rel){
   if(daily)return {error:'Para lembrete diário, informe um horário fixo.'};
-  const n=Number(rel[1]);if(!Number.isInteger(n)||n<1||n>10080)return {error:'Informe um intervalo entre 1 minuto e 7 dias.'};
-  const dueMs=now.getTime()+n*(/hora/iu.test(rel[2])?3600000:60000);
-  const due=new Date(Math.ceil(dueMs/60000)*60000);
-  const title=cleanReminder(rest.replace(rel[0],' '));
-  if(!title)return {error:'Informe também o assunto do lembrete.'};
-  return {date:reminderDay(due),time:reminderClock(due),title,daily:false};
+  const numbers={um:1,uma:1,dois:2,duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,treze:13,quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60};
+  const spoken=agendaNorm(rel[1]);
+  const n=/^\d+$/.test(spoken)?Number(spoken):numbers[spoken];
+  const multiplier=/^h(?:oras?)?$/iu.test(rel[2])?3600000:60000;
+  if(!Number.isInteger(n)||n<1||n*multiplier>7*24*3600000)return {error:'Não agendei: informe um intervalo de 1 minuto a 7 dias.'};
+  // A agenda armazena HH:mm: nunca marcar antes do intervalo pedido.
+  const due=new Date(Math.ceil((now.getTime()+n*multiplier)/60000)*60000);
+  let title=cleanReminder(rest.replace(rel[0],' '));
+  if(/^(?:me\s+)?(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)(?:-me)?$/iu.test(title))title='';
+  return {date:reminderDay(due),time:reminderClock(due),title:title||'Lembrete',daily:false};
  }
  // Horários falados: “às 5 horas da tarde”, “às 17h”, “8h30”, “amanhã às 9”.
  const dateMatch=rest.match(/(?:^|\s)(hoje|amanh[ãa]|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{4})?)(?=\s|[.,!?;:]|$)/iu);
@@ -750,10 +755,6 @@ function reminderTime(text,now=new Date()){
  if(!title)return {error:'Não agendei: informe também o assunto do lembrete.'};
  return {date:day,time,title,daily};
 }
-function reminderCloudAdvice(){
- const enabled=typeof Notification!=='undefined'&&Notification.permission==='granted'&&!!localStorage.getItem('alivi-fcm-token:'+uid);
- return enabled?'Há um cadastro local do Firebase neste aparelho, mas a entrega no horário depende de confirmação do serviço remoto.':'Para receber com a ALIVI fechada, ative e teste o Firebase em Notificações.';
-}
 async function confirmReminderRemote(task){
  const key='agenda:'+task.id;
  try{
@@ -791,14 +792,14 @@ async function reminderCommand(q){
  if(v.error)return v.error;
  const duplicate=agenda.find(x=>x.reminder&&!x.done&&x.date===v.date&&x.time===v.time&&x.daily===v.daily&&agendaNorm(x.title)===agendaNorm(v.title));
  if(duplicate){
-  return await confirmReminderRemote(duplicate)?'Esse lembrete já existe e está confirmado no banco: '+duplicate.title+' — '+agendaDateLabel(duplicate.date)+' às '+duplicate.time+'. '+reminderCloudAdvice():'Esse lembrete já existe neste aparelho, mas a confirmação do banco está pendente. Abra Notificações para verificar.';
+  return await confirmReminderRemote(duplicate)?'Esse lembrete já existe e está confirmado no banco: '+duplicate.title+' — '+agendaDateLabel(duplicate.date)+' às '+duplicate.time+'.':'Esse lembrete já existe neste aparelho, mas a confirmação do banco está pendente. Abra Notificações para verificar.';
  }
  const task={id:crypto.randomUUID(),title:v.title,date:v.date,time:v.time,done:false,reminder:true,daily:v.daily};
  if(!validTask(task))return 'Não consegui cadastrar: confira o assunto, a data e a hora.';
  if(!saveAgenda([...agenda,task]))return 'Não consegui salvar o lembrete.';
  const saved=await confirmReminderRemote(task);
  const label=task.title+' — '+(task.daily?'diariamente, a partir de ':'')+agendaDateLabel(task.date)+' às '+task.time+'.';
- return saved?'Lembrete salvo e confirmado no banco: '+label+' '+reminderCloudAdvice():'Lembrete salvo apenas neste aparelho: '+label+' A sincronização com o banco não foi confirmada. Não posso garantir notificação com o aplicativo fechado. Confira em Notificações.';
+ return saved?'Lembrete salvo e confirmado no banco: '+label:'Lembrete salvo apenas neste aparelho: '+label+' A sincronização com o banco não foi confirmada. Não posso garantir notificação com o aplicativo fechado. Confira em Notificações.';
 }
 function reminderRows(now=new Date()){const today=reminderDay(now);return agenda.filter(x=>x.reminder&&!x.done&&x.time).flatMap(x=>{const day=x.daily?today:x.date;if(day<x.date||new Date(day+'T'+x.time)>now)return [];return [{key:'reminder:'+x.id+':'+day+':'+x.time,page:'agenda',category:'Lembrete',title:x.title,detail:agendaDateLabel(day)+' às '+x.time,urgent:true}];});}
 
