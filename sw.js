@@ -1,5 +1,5 @@
-const CACHE='alivi-mobile-v3.10.9';
-const FILES=['./','./index.html','./app.js','./app.js?v=3.10.9','./icon.svg','./logo-mark.png','./alivi-icon-192-r2.png','./alivi-icon-512-r2.png','./alivi-icon-maskable-512-r2.png','./alivi-apple-touch-180-r2.png','./badge-96.png','./manifest.webmanifest','./version.json'];
+const CACHE='alivi-mobile-v3.10.10';
+const FILES=['./','./index.html','./app.js','./app.js?v=3.10.10','./icon.svg','./logo-mark.png','./alivi-icon-192-r2.png','./alivi-icon-512-r2.png','./alivi-icon-maskable-512-r2.png','./alivi-apple-touch-180-r2.png','./badge-96.png','./manifest.webmanifest','./version.json'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('alivi-mobile-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('message',e=>{if(e.data?.type==='SKIP_WAITING')self.skipWaiting()});

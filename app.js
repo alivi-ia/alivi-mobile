@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.9',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.10',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -450,8 +450,18 @@ function localReply(q){const t=q.toLowerCase();if(t.includes('nota'))return 'Sua
 let lastReply='';
 // Memory operations: scope every request to the authenticated account.
 function normalizeMemory(v){return String(v||'').normalize('NFKC').toLocaleLowerCase('pt-BR').replace(/\s+/g,' ').replace(/[.!?;:,]+$/u,'').trim()}
-const memoryCommand=/\b(?:memorize|memorizar|lembre[- ]?se|lembre de|guarde na mem[oó]ria|salve na mem[oó]ria)\b/iu;
-function memoryFact(q){const s=String(q||'').trim();if(/\b(?:não|nunca)\s+(?:memorize|memorizar|guarde|salve|lembre)/iu.test(s))return '';const m=memoryCommand.exec(s);if(!m)return '';const after=s.slice(m.index+m[0].length).replace(/^\s*(?:[:,;–-]\s*)?(?:que\s+|de que\s+)?/iu,'').trim();const before=s.slice(0,m.index).replace(/[,;:.\s]+$/u,'').trim();return (after||before).replace(/\s*[,;]?\s*(?:por favor|por gentileza)\s*[.!?]*$/iu,'').trim()}
+// 3.10.10 — Comandos naturais de memória, exigindo pedido explícito.
+// Evita transformar perguntas normais e avisos de agenda em memórias.
+const memoryCommand=/\b(?:memorize|memorizar|memoriza|lembre[- ]?se(?:\s+de)?|lembre\s+(?:de|que)|(?:guarde|guardar|guarda|salve|salvar|salva|anote|anotar|anota|registre|registrar)\s+(?:(?:isso|esta\s+informa[cç][aã]o|esse\s+detalhe)\s+)?(?:na|em)\s+(?:(?:minha|sua)\s+)?mem[oó]ria)\b/iu;
+function memoryFact(q){
+ const s=String(q||'').trim();
+ if(/\b(?:n[aã]o|nunca)\s+(?:(?:quero|gostaria)\s+que\s+)?(?:memorize|memorizar|memoriza|guarde|guardar|salve|salvar|anote|registre|lembre)/iu.test(s))return '';
+ const m=memoryCommand.exec(s);if(!m)return '';
+ const after=s.slice(m.index+m[0].length).replace(/^\s*(?:[:,;–-]\s*)?(?:de\s+que\s+|que\s+)?/iu,'').trim();
+ const before=s.slice(0,m.index).replace(/[,;:.\s]+$/u,'').replace(/^(?:oi\s*)?alivi[,!?\s]*/iu,'').trim();
+ const fact=(after||before).replace(/\s*[,;]?\s*(?:por favor|por gentileza)\s*[.!?]*$/iu,'').trim();
+ return /^(?:isso|esta informa[cç][aã]o|esse detalhe)$/iu.test(fact)?'':fact;
+}
 function canonical(v){return normalizeMemory(memoryFact(v)||v)}
 function memoryScope(){if(!uid)throw Error('Entre na sua conta');return 'user_id=eq.'+encodeURIComponent(uid)}
 async function readMemories(limit=100){const all=[];for(let offset=0;offset<10000;offset+=100){const rows=await db('user_memory','GET',memoryScope()+'&select=id,memory_key,memory_value&order=updated_at.desc,id.desc&limit='+Math.min(100,limit-all.length)+'&offset='+offset);all.push(...rows);if(rows.length<100||all.length>=limit)return all}throw Error('Limite de consulta de memórias atingido')}
@@ -463,6 +473,36 @@ async function showMemories(){const g=generation;const target=$('memory-list');t
 $('show-memory').onclick=showMemories;
 
 let busy=false,syncing=false;
+// Um teste de ida e volta no banco, limitado à conta atual.
+// Não substitui uma auditoria RLS nem demonstra isolamento entre contas.
+$('memory-test').onclick=async()=>{
+ if(!uid||busy)return;
+ if(!confirm('Fazer um teste da memória nesta conta? A ALIVI criará um registro temporário, verificará a leitura e tentará excluí-lo em seguida.'))return;
+ const b=$('memory-test'),status=$('memory-test-status');
+ const g=generation,account=uid;
+ const fact='TESTE TEMPORÁRIO ALIVI '+crypto.randomUUID();
+ const key='explicit:'+canonical(fact);
+ b.disabled=true;busy=true;status.textContent='Verificando gravação, leitura e exclusão nesta conta...';
+ let created=false,deleted=false;
+ try{
+  const result=await storeMemory(fact,g);
+  if(g!==generation||account!==uid)return;
+  created=true;
+  if(!/Memória salva no banco/.test(result))throw Error('O registro de teste não foi criado: '+result);
+  const found=await db('user_memory','GET',memoryScope()+'&memory_key=eq.'+encodeURIComponent(key)+'&select=id,memory_value');
+  if(g!==generation||account!==uid)return;
+  if(found.length!==1||found[0].memory_value!==fact)throw Error('A leitura de volta não confirmou a memória.');
+  await db('user_memory','DELETE',memoryScope()+'&id=eq.'+encodeURIComponent(found[0].id));
+  const check=await db('user_memory','GET',memoryScope()+'&memory_key=eq.'+encodeURIComponent(key)+'&select=id');
+  if(g!==generation||account!==uid)return;
+  if(check.length)throw Error('O registro de teste não foi excluído do banco.');
+  deleted=true;
+  status.textContent='✓ Gravação, leitura e exclusão confirmadas nesta conta. Para verificar a privacidade, compare com outra conta e conclua a auditoria do banco.';
+ }catch(e){
+  if(g===generation&&account===uid)status.textContent='Teste incompleto: '+e.message+(created&&!deleted?' Se o registro temporário permanecer, você pode excluí-lo em “Ver memórias salvas”.':'');
+ }finally{busy=false;b.disabled=false}
+};
+
 async function db(table,method='GET',query='',body,representation=false,merge=false){const token=await getToken();if(!token)throw Error('Sessão indisponível');const r=await fetch(SB+'/rest/v1/'+table+'?'+query,{method,headers:{apikey:PUB,Authorization:'Bearer '+token,'Content-Type':'application/json',Prefer:(method==='POST'?(merge?'resolution=merge-duplicates,':'resolution=ignore-duplicates,'):'')+(representation?'return=representation':'return=minimal')},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok){const detail=await r.json().catch(()=>({}));throw Error('Sincronização HTTP '+r.status+(detail.code?' ('+detail.code+')':'')+(detail.message?' — '+String(detail.message).slice(0,180):''));}return method==='GET'||representation?await r.json():null}
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
