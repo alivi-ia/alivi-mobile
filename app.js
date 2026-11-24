@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.7',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.8',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -678,12 +678,21 @@ function extendedManagement(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'').
 }
 
 
-// 3.10.7 — Intervalos falados e confirmação de lembrete sem detalhes técnicos.
+// 3.10.8 — Tolerância a transcrição de voz (“vi me avise”) sem encaminhar o lembrete à IA.
+function reminderCleanVoiceLead(q){
+ let t=String(q||'').trim();
+ // Mantém compatibilidade com “ALIVI, agenda...”, “ALIVI, me avise...”.
+ t=t.replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/iu,'');
+ // O reconhecimento do navegador às vezes transcreve “ALIVI” como “vi”/“ali vi”.
+ // Remover apenas quando seguido de um comando EXPLÍCITO de lembrete evita enganos.
+ t=t.replace(/^(?:ali\s*vi|alvi|aliv|ali|vi)[,!:\s]+(?=(?:me\s+)?(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)\b)/iu,'');
+ return t.trim();
+}
 function isReminderIntent(q){
- const t=agendaNorm(q).replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/,'').replace(/^(?:o|a)\s+/,'').trim();
+ const t=agendaNorm(reminderCleanVoiceLead(q)).replace(/^(?:o|a)\s+/,'').trim();
  if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes\b/.test(t))return true;
  if(/^(?:cancele|cancelar|reagende|remarque)\s+(?:o\s+)?lembrete\b/.test(t))return true;
- if(/^(?:me\s+(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)|(?:avise|avisa|lembre|lembra|notifique|notifica)-me|(?:crie|cadastre|agende)\s+(?:um\s+)?lembrete)\b/.test(t))return true;
+ if(/^(?:me\s+(?:avise|avisa|avisar|lembre|lembra|lembrar|notifique|notifica|notificar)|(?:avise|avisa|lembre|lembra|notifique|notifica)(?:-me)?|(?:crie|cadastre|agende)\s+(?:um\s+)?lembrete)\b/.test(t))return true;
  if(/^(?:agenda|agende|agendar|marque|programa|programe|programar)\b/.test(t)&&/\b(?:avis\w*|lembr\w*|notific\w*|lembrete)\b/.test(t))return true;
  if(/^(?:quero|preciso|pode|por favor|gostaria|voce|você)\b/.test(t)&&/\b(?:avis\w*|lembr\w*|notific\w*)\b/.test(t))return true;
  return false;
@@ -767,7 +776,7 @@ async function confirmReminderRemote(task){
  }catch(e){return false}
 }
 async function reminderCommand(q){
- const t=q.trim().replace(/^(?:oi\s+|ei\s+)?alivi[,!:\s]*/iu,'').replace(/[.!?]+$/,'');let m;
+ const t=reminderCleanVoiceLead(q).replace(/[.!?]+$/,'');let m;
  if(/^(?:liste|mostre|consulte)\s+(?:meus\s+)?lembretes$/iu.test(t)){
   await syncManagement();
   const rows=agenda.filter(x=>x.reminder&&!x.done);
