@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.11',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.12',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -486,7 +486,7 @@ async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+p
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviPrivacyReset();aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+function lock(){aliviClearImage();setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviPrivacyReset();aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
 async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;aliviPrivacyReset();aliviLoadAccountProfile(u);loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
@@ -579,10 +579,67 @@ async function db(table,method='GET',query='',body,representation=false,merge=fa
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
 async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
+
+// 3.10.12 — imagem opcional: conversão local remove metadados EXIF/GPS.
+// A imagem é enviada apenas na solicitação expressa; não vai para o histórico de texto.
+let aliviPendingImage=null;
+function aliviClearImage(){
+ aliviPendingImage=null;
+ const f=$('alivi-image-input');if(f)f.value='';
+ const p=$('alivi-image-preview');if(p)p.hidden=true;
+ const pic=$('alivi-image-thumb');if(pic)pic.removeAttribute('src');
+}
+async function aliviPrepareImage(file){
+ if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Escolha uma foto JPG, PNG ou WebP.');
+ if(file.size>8*1024*1024)throw Error('A foto original ultrapassa 8 MB. Escolha uma menor.');
+ let src,bitmap;
+ try{
+  if(typeof createImageBitmap==='function')bitmap=await createImageBitmap(file);
+  else{src=URL.createObjectURL(file);bitmap=await new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=()=>reject(Error('Não foi possível abrir a foto.'));i.src=src})}
+  const w=bitmap.width||bitmap.naturalWidth,h=bitmap.height||bitmap.naturalHeight;
+  if(!w||!h)throw Error('Imagem inválida.');
+  const scale=Math.min(1,1280/Math.max(w,h));
+  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(w*scale));c.height=Math.max(1,Math.round(h*scale));
+  const ctx=c.getContext('2d',{alpha:false});if(!ctx)throw Error('Seu navegador não consegue preparar a foto.');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,c.width,c.height);ctx.drawImage(bitmap,0,0,c.width,c.height);
+  let data=c.toDataURL('image/jpeg',.77);
+  if(data.length>1800000)data=c.toDataURL('image/jpeg',.53);
+  if(data.length>1800000)throw Error('A foto ainda ficou grande. Tente outra.');
+  return {data,name:file.name.slice(0,90),base64:data.split(',')[1]};
+ }finally{if(bitmap&&typeof bitmap.close==='function')bitmap.close();if(src)URL.revokeObjectURL(src)}
+}
+$('attach').onclick=()=>{if(busy||!uid)return;$('alivi-image-input').click()};
+$('alivi-image-input').addEventListener('change',async e=>{
+ const selected=e.target.files?.[0];if(!selected||busy)return;
+ const who=uid,g=generation;
+ $('chat-notice').textContent='Preparando a foto no seu aparelho...';
+ try{
+  const ready=await aliviPrepareImage(selected);
+  if(who!==uid||g!==generation)return;
+  aliviPendingImage=ready;
+  $('alivi-image-thumb').src=ready.data;
+  $('alivi-image-label').textContent=ready.name+' • foto selecionada (ainda não enviada)';
+  $('alivi-image-preview').hidden=false;
+  $('chat-notice').textContent='Foto pronta. Escreva ou dite o que deseja saber e toque em Enviar.';
+ }catch(err){if(who===uid&&g===generation){aliviClearImage();$('chat-notice').textContent='Não foi possível anexar: '+err.message}}
+});
+$('alivi-image-remove').onclick=()=>{aliviClearImage();$('chat-notice').textContent='Foto retirada. Nenhuma imagem foi enviada.'};
+async function aliviAnalyzeImage(img,question,token){
+ const r=await fetch(SB+'/functions/v1/alivi-image',{method:'POST',headers:{'Content-Type':'application/json','apikey':PUB,'Authorization':'Bearer '+token},body:JSON.stringify({question:question.slice(0,800),mime_type:'image/jpeg',image_base64:img.base64})});
+ const data=await r.json().catch(()=>({}));
+ if(!r.ok||typeof data.reply!=='string'){
+  const error=String(data.error||data.message||'Serviço de imagens indisponível').slice(0,180);
+  if(r.status===404)throw Error('Análise de imagens ainda não ativada no servidor. Configure a função alivi-image no Supabase.');
+  throw Error(error+' (HTTP '+r.status+').');
+ }
+ return {reply:data.reply,searched:false};
+}
+
 async function sendChat(){
- const q=$('message').value.trim();
+ const attachedImage=aliviPendingImage;
+ const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
  if(!q||busy||syncing||!uid)return;
- if(/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){
+ if(!attachedImage&&/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){
   if(voiceModeOn)setVoiceMode(false);
   $('message').value='';go('feedback');await loadFeedbackMine();return;
  }
@@ -593,32 +650,34 @@ async function sendChat(){
  }
  busy=true;if(voiceModeOn)clearVoiceIdleTimer();
  const g=generation;
- const isReminder=isReminderIntent(q);
- $('send').disabled=true;$('chat-notice').textContent=isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
+ const isReminder=!attachedImage&&isReminderIntent(q);
+ $('send').disabled=true;$('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
  let questionRecorded=false;
  try{
   const token=await getToken();if(!token)throw Error('Sua sessão expirou. Entre novamente.');
   if(g!==generation)return;
   const project=activeProject;
+  const imageAnswer=attachedImage?await aliviAnalyzeImage(attachedImage,q,token):null;
+  if(g!==generation)return;
   const history=($('memory-only').checked?[]:visibleMessages().slice(-20)).map(m=>({role:m.role,text:m.text.slice(0,1500)}));
   // Um lembrete local não depende da disponibilidade da API de IA/memória.
-  let memory=isReminder?[]:await readMemories(10000);
+  let memory=(isReminder||attachedImage)?[]:await readMemories(10000);
   if(g!==generation)return;
-  const user=stamp({role:'user',text:q});
+  const user=stamp({role:'user',text:attachedImage?'[Imagem analisada; arquivo não armazenado]\n'+q:q});
   try{
    await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});
   }catch(e){if(!isReminder)throw e;}
   if(g!==generation)return;
   $('message').value='';
   associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();questionRecorded=true;
-  let memoryStatus='',directReply='';
-  const fact=isReminder?'':memoryFact(q);
+  let memoryStatus='',directReply=imageAnswer?.reply||'';
+  const fact=(isReminder||attachedImage)?'':memoryFact(q);
   if(isReminder){
    await syncManagement();
    if(g!==generation)return;
    directReply=await reminderCommand(q);
    if(!directReply)directReply='Não consegui entender o pedido de lembrete. Diga: “Me avise de beber água daqui a 5 minutos”.';
-  }else if(!fact){
+  }else if(!fact&&!attachedImage){
    await syncManagement();
    if(g!==generation)return;
    directReply=extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);
@@ -653,6 +712,7 @@ async function sendChat(){
   catch(e){answerSynced=false;}
   if(g!==generation)return;
   associate(answer,project);messages.push(answer);lastReply=answer.text;chatSave();
+  if(attachedImage&&aliviPendingImage===attachedImage)aliviClearImage();
   $('chat-notice').textContent=answerSynced?(data.searched?'Pesquisa realizada.':'Resposta concluída.'):'Resposta exibida; histórico ainda não sincronizado.';
   if(voiceModeOn)void say(answer.text,false);
   if(!directReply)suggestPreference(q,memory);
@@ -734,7 +794,7 @@ function startSpeechInput(automatic=false){
 }
 $('mic').onclick=()=>startSpeechInput(false);
 $('repeat-voice').onclick=()=>{if(lastReply)say(lastReply,true);else voiceStatus('Ainda não há resposta para reproduzir.')};
-$('attach').onclick=()=>{$('chat-notice').textContent='Anexos ainda não estão disponíveis nesta versão.'};
+// Botão + configurado no módulo de imagem 3.10.12.
 $('clear-token').onclick=async()=>{const t=session?.access_token;try{await unregisterRemotePush()}catch{}lock();if(t)try{await fetch(SB+'/auth/v1/logout?scope=local',{method:'POST',headers:{apikey:PUB,Authorization:'Bearer '+t}})}catch{}};
 $('clear-chat').onclick=async()=>{if(!uid||busy||syncing||!confirm('Apagar conversas sincronizadas em todos os aparelhos?'))return;busy=true;try{await db('chat_messages','DELETE','user_id=eq.'+encodeURIComponent(uid));messages=[];associations=Object.create(null);saveProjects();lastReply='';chatSave();stopAudio()}catch(e){alert(e.message)}finally{busy=false}};chatRender();
 async function update(){go('settings');const st=$('updateStatus');st.textContent='Verificando atualização...';try{const response=await fetch('./version.json?check='+Date.now(),{cache:'no-store'});if(!response.ok)throw Error('Servidor indisponível');const v=await response.json();if(!v.version||typeof v.version!=='string')throw Error('Versão inválida');const reg=await navigator.serviceWorker?.getRegistration();if(reg){await reg.update();if(reg.waiting){st.textContent='Atualização encontrada. Aplicando...';reg.waiting.postMessage({type:'SKIP_WAITING'});setTimeout(()=>location.reload(),1200);return}}if(v.version!==VERSION){st.textContent='Versão '+v.version+' disponível. Reabrindo para carregar...';setTimeout(()=>location.reload(),1200)}else st.textContent='ALIVI atualizada: '+v.version+'.'}catch(e){st.textContent='Não foi possível verificar: '+e.message;st.classList.add('error')}}
