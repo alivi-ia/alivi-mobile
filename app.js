@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.10',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.11',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -410,12 +410,84 @@ $('alivi-profile-form').addEventListener('submit',async e=>{
  finally{btn.disabled=false}
 });
 
+// 3.10.11 — Diagnóstico de isolamento: leituras REAIS via token da conta,
+// sem privilégios administrativos, sem escrever e sem exibir dados de terceiros.
+const aliviPrivacyTables=[
+  {table:'chat_messages',label:'Conversas'},
+  {table:'user_memory',label:'Memórias'},
+  {table:'alivi_management',label:'Agenda, finanças e gestão'},
+  {table:'alivi_fcm_tokens',label:'Notificações do aparelho'}
+];
+let aliviPrivacyCheckRunning=false;
+function aliviPrivacyReset(){
+  $('privacy-check-status').textContent='Ainda não verificado nesta sessão.';
+  $('privacy-check-list').replaceChildren();
+}
+function aliviPrivacyAdd(label,description,warning=false){
+  const item=document.createElement('div');item.className='item';
+  const title=document.createElement('b');title.textContent=label;
+  const info=document.createElement('p');info.textContent=description;
+  if(warning)info.style.color='#ffcb87';
+  item.append(title,info);$('privacy-check-list').append(item);
+}
+async function aliviPrivacyCheck(){
+  if(aliviPrivacyCheckRunning||!uid)return;
+  const user=uid,g=generation,button=$('privacy-check-run');
+  aliviPrivacyCheckRunning=true;button.disabled=true;
+  $('privacy-check-list').replaceChildren();
+  $('privacy-check-status').textContent='Verificando a sessão e as leituras do Supabase...';
+  let findings=0,errors=0,checked=0;
+  try{
+    const token=await getToken();
+    if(!token)throw Error('A sessão não está disponível. Entre novamente.');
+    const identity=await authRequest('user',null,token);
+    if(g!==generation||uid!==user)return;
+    if(identity.id!==user)throw Error('A identidade da sessão mudou. Entre novamente.');
+    aliviPrivacyAdd('Conta conectada','Identidade confirmada no servidor.');
+    for(const test of aliviPrivacyTables){
+      if(g!==generation||uid!==user)return;
+      try{
+        const url=SB+'/rest/v1/'+test.table+'?select=user_id&user_id=neq.'+encodeURIComponent(user)+'&limit=1';
+        const response=await fetch(url,{method:'GET',headers:{apikey:PUB,Authorization:'Bearer '+token,Accept:'application/json'},cache:'no-store'});
+        if(!response.ok)throw Error('Consulta HTTP '+response.status);
+        const rows=await response.json();
+        if(!Array.isArray(rows))throw Error('Resposta inesperada do servidor.');
+        if(g!==generation||uid!==user)return;
+        checked++;
+        if(rows.length){
+          findings++;
+          aliviPrivacyAdd(test.label,'ALERTA: o servidor retornou um registro de outra conta. Não libere novos usuários antes de corrigir a regra.',true);
+        }else{
+          aliviPrivacyAdd(test.label,'Nenhum registro de outra conta foi retornado nesta consulta.');
+        }
+      }catch(e){
+        if(g!==generation||uid!==user)return;
+        errors++;
+        aliviPrivacyAdd(test.label,'Verificação inconclusiva: '+e.message,true);
+      }
+    }
+    if(g!==generation||uid!==user)return;
+    if(findings)$('privacy-check-status').textContent='ATENÇÃO: '+findings+' possível(is) falha(s) de isolamento detectada(s). Suspenda os convites.';
+    else if(errors)$('privacy-check-status').textContent='Verificação incompleta: '+errors+' consulta(s) com erro. Não considerar homologado.';
+    else $('privacy-check-status').textContent=checked+' verificações de leitura sem retorno de registros de outras contas. Falta conferir as permissões de escrita e exclusão.';
+  }catch(e){
+    if(g===generation&&uid===user){
+      aliviPrivacyAdd('Não foi possível concluir',e.message,true);
+      $('privacy-check-status').textContent='Diagnóstico inconclusivo. Não considerar homologado.';
+    }
+  }finally{
+    aliviPrivacyCheckRunning=false;
+    button.disabled=false;
+  }
+}
+$('privacy-check-run').addEventListener('click',aliviPrivacyCheck);
+
 async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+path,{method:body?'POST':'GET',headers:{apikey:PUB,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});const d=await r.json().catch(()=>({}));if(!r.ok){const e=Error(d.msg||d.message||d.error_description||'Falha de autenticação: '+r.status);e.status=r.status;throw e}return d}
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
-async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;aliviLoadAccountProfile(u);loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
+function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviPrivacyReset();aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;aliviPrivacyReset();aliviLoadAccountProfile(u);loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
 async function restore(){sessionStorage.removeItem(TOKENKEY);if(location.hash.includes('access_token=')||location.hash.includes('error='))history.replaceState(null,'',location.pathname+location.search);try{session=JSON.parse(localStorage.getItem(SESSION)||'null');if(session)await enter();else $('auth-status').textContent='Entre na sua conta.'}catch(e){$('auth-status').textContent='Não foi possível restaurar a sessão: '+e.message}}
@@ -450,7 +522,7 @@ function localReply(q){const t=q.toLowerCase();if(t.includes('nota'))return 'Sua
 let lastReply='';
 // Memory operations: scope every request to the authenticated account.
 function normalizeMemory(v){return String(v||'').normalize('NFKC').toLocaleLowerCase('pt-BR').replace(/\s+/g,' ').replace(/[.!?;:,]+$/u,'').trim()}
-// 3.10.10 — Comandos naturais de memória, exigindo pedido explícito.
+// 3.10.11 — Comandos naturais de memória, exigindo pedido explícito.
 // Evita transformar perguntas normais e avisos de agenda em memórias.
 const memoryCommand=/\b(?:memorize|memorizar|memoriza|lembre[- ]?se(?:\s+de)?|lembre\s+(?:de|que)|(?:guarde|guardar|guarda|salve|salvar|salva|anote|anotar|anota|registre|registrar)\s+(?:(?:isso|esta\s+informa[cç][aã]o|esse\s+detalhe)\s+)?(?:na|em)\s+(?:(?:minha|sua)\s+)?mem[oó]ria)\b/iu;
 function memoryFact(q){
