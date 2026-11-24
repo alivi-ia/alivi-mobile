@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.8',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.9',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
@@ -315,12 +315,107 @@ function stopAudio(){playbackEpoch++;if(audio){audio.pause();audio.src='';audio=
 function getBase(){return DEFAULT_API}
 const SB='https://xadzckilujbydycebizj.supabase.co', PUB='sb_publishable_Gm2JW3ns-WmQmFvg3JNXjA_n0VjCDpD', SESSION='alivi-auth-v1';
 let session=null, refreshing=null, generation=0;
+
+// 3.10.9 — Perfil opcional, ligado ao próprio usuário autenticado.
+// user_metadata é apresentação, NUNCA autorização ou nível de acesso.
+let aliviProfile={userId:'',email:'',name:'',avatar:''};
+let aliviProfileDraftAvatar='';
+function aliviProfileText(value,max){return typeof value==='string'?value.trim().slice(0,max):''}
+function aliviAvatarAllowed(value){return typeof value==='string'&&value.length<31000&&/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(value)?value:''}
+function aliviProfileLabel(){return aliviProfile.name||((aliviProfile.email||'').split('@')[0])||'Minha conta'}
+function aliviSetAvatar(imgId,initialId,source){
+ const pic=$(imgId),initial=$(initialId);
+ const okay=aliviAvatarAllowed(source);
+ pic.hidden=!okay;initial.hidden=!!okay;
+ if(okay){pic.src=okay;pic.onerror=()=>{pic.hidden=true;initial.hidden=false}}else pic.removeAttribute('src');
+ initial.textContent=aliviProfileLabel().slice(0,1).toLocaleUpperCase('pt-BR')||'?';
+}
+function aliviRenderAccountProfile(){
+ $('alivi-profile-display-name').textContent=aliviProfileLabel();
+ $('alivi-profile-display-email').textContent=aliviProfile.email||'Conta não identificada';
+ $('alivi-profile-button').title='Conta conectada: '+(aliviProfile.email||'');
+ aliviSetAvatar('alivi-profile-avatar','alivi-profile-initial',aliviProfile.avatar);
+}
+function aliviLoadAccountProfile(u){
+ const m=u&&u.user_metadata&&typeof u.user_metadata==='object'?u.user_metadata:{};
+ aliviProfile={userId:u?.id||'',email:u?.email||'',name:aliviProfileText(m.alivi_display_name,45),avatar:aliviAvatarAllowed(m.alivi_avatar_small)};
+ aliviRenderAccountProfile();
+}
+function aliviPreviewProfile(){
+ $('alivi-profile-preview-name').textContent=aliviProfileText($('alivi-profile-name-input').value,45)||aliviProfile.email.split('@')[0]||'Minha conta';
+ aliviSetAvatar('alivi-profile-photo-preview','alivi-profile-preview-initial',aliviProfileDraftAvatar);
+ $('alivi-profile-preview-initial').textContent=($('alivi-profile-preview-name').textContent||'?').charAt(0).toLocaleUpperCase('pt-BR');
+}
+function aliviOpenProfile(){
+ if(!uid||uid!==aliviProfile.userId)return;
+ $('alivi-profile-name-input').value=aliviProfile.name;
+ $('alivi-profile-account-email').textContent=aliviProfile.email;
+ $('alivi-profile-file').value='';
+ aliviProfileDraftAvatar=aliviProfile.avatar;
+ $('alivi-profile-status').textContent='';$('alivi-profile-status').classList.remove('error');
+ aliviPreviewProfile();
+ closeMobileDrawer();
+ $('alivi-profile-dialog').showModal();
+}
+function aliviProfileFileData(file){
+ return new Promise((resolve,reject)=>{
+  if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type))return reject(Error('Escolha uma foto JPG, PNG ou WebP.'));
+  if(file.size>8*1024*1024)return reject(Error('A foto deve ter até 8 MB.'));
+  const url=URL.createObjectURL(file);const img=new Image();
+  img.onload=()=>{
+   URL.revokeObjectURL(url);
+   try{
+    const side=Math.min(img.naturalWidth,img.naturalHeight);
+    if(!side)throw Error('Foto inválida.');
+    const canvas=document.createElement('canvas');canvas.width=120;canvas.height=120;
+    const ctx=canvas.getContext('2d');if(!ctx)throw Error('Seu navegador não conseguiu preparar a foto.');
+    ctx.drawImage(img,(img.naturalWidth-side)/2,(img.naturalHeight-side)/2,side,side,0,0,120,120);
+    let data=canvas.toDataURL('image/jpeg',.73);
+    if(data.length>30000)data=canvas.toDataURL('image/jpeg',.48);
+    if(data.length>30000)throw Error('Escolha outra foto: a imagem ficou grande demais.');
+    resolve(data);
+   }catch(e){reject(e)}
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Não foi possível abrir a foto.'))};
+  img.src=url;
+ });
+}
+$('alivi-profile-button').addEventListener('click',aliviOpenProfile);
+$('alivi-profile-close').addEventListener('click',()=>$('alivi-profile-dialog').close());
+$('alivi-profile-name-input').addEventListener('input',aliviPreviewProfile);
+$('alivi-profile-remove-photo').addEventListener('click',()=>{aliviProfileDraftAvatar='';$('alivi-profile-file').value='';aliviPreviewProfile()});
+$('alivi-profile-file').addEventListener('change',async()=>{
+ const input=$('alivi-profile-file'),file=input.files&&input.files[0];if(!file)return;
+ const status=$('alivi-profile-status');status.classList.remove('error');status.textContent='Preparando foto...';
+ try{aliviProfileDraftAvatar=await aliviProfileFileData(file);aliviPreviewProfile();status.textContent='Foto pronta. Clique em Salvar perfil.'}
+ catch(e){input.value='';status.textContent=e.message;status.classList.add('error')}
+});
+$('alivi-profile-form').addEventListener('submit',async e=>{
+ e.preventDefault();const btn=$('alivi-profile-save');if(!uid||uid!==aliviProfile.userId)return;
+ const expectedUid=uid,g=generation;
+ const name=aliviProfileText($('alivi-profile-name-input').value,45),avatar=aliviAvatarAllowed(aliviProfileDraftAvatar);
+ const status=$('alivi-profile-status');btn.disabled=true;status.classList.remove('error');status.textContent='Salvando seu perfil...';
+ try{
+  const token=await getToken();if(!token)throw Error('Entre novamente na sua conta.');
+  const response=await fetch(SB+'/auth/v1/user',{method:'PUT',headers:{apikey:PUB,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({data:{alivi_display_name:name,alivi_avatar_small:avatar}})});
+  const answer=await response.json().catch(()=>({}));
+  if(!response.ok)throw Error(answer.msg||answer.message||answer.error_description||'Não foi possível salvar seu perfil.');
+  const updatedUser=answer.user&&answer.user.id?answer.user:answer;
+  if(expectedUid!==uid||g!==generation||updatedUser.id!==expectedUid)throw Error('A conta mudou durante a atualização. Entre novamente.');
+  aliviLoadAccountProfile(updatedUser);
+  aliviProfileDraftAvatar=aliviProfile.avatar;
+  status.textContent='Perfil salvo e associado à sua conta!';
+  aliviPreviewProfile();
+ }catch(error){status.textContent='Não foi possível salvar: '+error.message;status.classList.add('error')}
+ finally{btn.disabled=false}
+});
+
 async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+path,{method:body?'POST':'GET',headers:{apikey:PUB,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});const d=await r.json().catch(()=>({}));if(!r.ok){const e=Error(d.msg||d.message||d.error_description||'Falha de autenticação: '+r.status);e.status=r.status;throw e}return d}
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
-async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
+function lock(){setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');uid=u.id;aliviLoadAccountProfile(u);loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
 async function restore(){sessionStorage.removeItem(TOKENKEY);if(location.hash.includes('access_token=')||location.hash.includes('error='))history.replaceState(null,'',location.pathname+location.search);try{session=JSON.parse(localStorage.getItem(SESSION)||'null');if(session)await enter();else $('auth-status').textContent='Entre na sua conta.'}catch(e){$('auth-status').textContent='Não foi possível restaurar a sessão: '+e.message}}
