@@ -626,6 +626,7 @@ $('alivi-image-input').addEventListener('change',async e=>{
 $('alivi-image-remove').onclick=()=>{aliviClearImage();$('chat-notice').textContent='Foto retirada. Nenhuma imagem foi enviada.'};
 async function aliviAnalyzeImage(img,question,token){
  const r=await fetch(SB+'/functions/v1/alivi-image',{method:'POST',headers:{'Content-Type':'application/json','apikey':PUB,'Authorization':'Bearer '+token},body:JSON.stringify({question:question.slice(0,800),mime_type:'image/jpeg',image_base64:img.base64})});
+ if(aliviPendingImage===img)$('alivi-image-label').textContent=img.name+' • servidor respondeu (HTTP '+r.status+')';
  const data=await r.json().catch(()=>({}));
  if(!r.ok||typeof data.reply!=='string'){
   const error=String(data.error||data.message||'Serviço de imagens indisponível').slice(0,180);
@@ -638,7 +639,7 @@ async function aliviAnalyzeImage(img,question,token){
 async function sendChat(){
  const attachedImage=aliviPendingImage;
  const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
- if(!q||busy||syncing||!uid)return;
+ if(!q||busy||!uid||(!attachedImage&&syncing))return;
  if(!attachedImage&&/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){
   if(voiceModeOn)setVoiceMode(false);
   $('message').value='';go('feedback');await loadFeedbackMine();return;
@@ -654,6 +655,13 @@ async function sendChat(){
  $('send').disabled=true;$('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
  let questionRecorded=false;
  try{
+  if(attachedImage){
+   const deadline=Date.now()+15000;
+   while(syncing&&g===generation&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,100));
+   if(g!==generation)return;
+   if(syncing)throw Error('Sincronização ainda em andamento. Tente novamente.');
+   $('alivi-image-label').textContent=attachedImage.name+' • enviando para análise...';
+  }
   const token=await getToken();if(!token)throw Error('Sua sessão expirou. Entre novamente.');
   if(g!==generation)return;
   const project=activeProject;
@@ -719,6 +727,7 @@ async function sendChat(){
  }catch(e){
   if(g===generation){
    $('chat-notice').textContent='Falha: '+e.message+' Confira a conexão e tente novamente.';
+    if(attachedImage&&aliviPendingImage===attachedImage)$('alivi-image-label').textContent=attachedImage.name+' • Falha: '+e.message;
    if(!questionRecorded&&!$('message').value.trim())$('message').value=q;
    if(voiceModeOn)voicePause('Houve uma falha. Confira a mensagem na tela e toque em Retomar para continuar.');
   }
