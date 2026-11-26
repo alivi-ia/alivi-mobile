@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.13',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.14',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -268,7 +268,7 @@ function voiceSubmitDraft(force=false){
  voiceClearDraft();$('message').value=clean;
  if(isVoiceStop(text)){setVoiceMode(false);$('message').value='';$('chat-notice').textContent='Conversa por voz encerrada.';return}
  if(!clean){voiceStatus('🎙 Pode continuar falando.');scheduleVoiceResume(350);return}
- if(busy||syncing){voicePause('Ainda estou processando uma mensagem. Seu texto foi mantido para envio.');return}
+ if(busy){voicePause('Ainda estou processando uma mensagem. Seu texto foi mantido para envio.');return}
  voiceSilenceRetries=0;voiceStatus('Mensagem completa. ALIVI pensando...');void sendChat();
 }
 function voiceScheduleDraftSend(){
@@ -578,7 +578,7 @@ $('memory-test').onclick=async()=>{
 
 async function db(table,method='GET',query='',body,representation=false,merge=false){const token=await getToken();if(!token)throw Error('Sessão indisponível');const r=await fetch(SB+'/rest/v1/'+table+'?'+query,{method,headers:{apikey:PUB,Authorization:'Bearer '+token,'Content-Type':'application/json',Prefer:(method==='POST'?(merge?'resolution=merge-duplicates,':'resolution=ignore-duplicates,'):'')+(representation?'return=representation':'return=minimal')},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok){const detail=await r.json().catch(()=>({}));throw Error('Sincronização HTTP '+r.status+(detail.code?' ('+detail.code+')':'')+(detail.message?' — '+String(detail.message).slice(0,180):''));}return method==='GET'||representation?await r.json():null}
 function stamp(m){return {...m,id:m.id||crypto.randomUUID(),created_at:m.created_at||new Date().toISOString()}}
-async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
+async function syncChat(initial=false){if(!uid||syncing||busy)return;syncing=true;const g=generation;try{if(initial){const old=messages.filter(m=>!m.id).map(stamp);if(old.length){messages=messages.filter(m=>m.id).concat(old);chatSave();await db('chat_messages','POST','on_conflict=id',old.map(m=>({id:m.id,role:m.role,content:m.text,created_at:m.created_at})))}}const rows=await db('chat_messages','GET','select=id,role,content,created_at&order=created_at.desc,id.desc&limit=100');if(g!==generation)return;const next=rows.reverse().map(r=>({id:r.id,role:r.role,text:r.content,created_at:r.created_at}));const changed=JSON.stringify(next)!==JSON.stringify(messages);messages=next;if(changed)chatSave(initial);else if(initial)scrollLatest();lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant')?.text||'';if(!busy)$('chat-notice').textContent='Tudo atualizado.'}catch(e){if(g===generation&&!busy)$('chat-notice').textContent='Histórico local preservado. '+e.message}finally{syncing=false}}
 setInterval(()=>{if(!document.hidden)syncChat()},10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncChat()});
 
 // 3.10.12 — imagem opcional: conversão local remove metadados EXIF/GPS.
@@ -637,10 +637,22 @@ async function aliviAnalyzeImage(img,question,token){
  return {reply:data.reply,searched:false};
 }
 
+// 3.10.14 — Pontuação opcional em perguntas claras. Somente para o pedido à IA;
+// histórico, comandos de gestão, memória e anexos conservam o texto original.
+function aliviQuestionForAI(text){
+ const original=String(text||'').trim();
+ const lead=original.replace(/^(?:(?:oi|olá|ola|ei)\s*[,!]?\s+)?alivi[,!:\s]+/iu,'');
+ if(!/[\n\r]/.test(original)&&/^(?:qual|quais|quanto|quanta|quantos|quantas|como|onde|quando|por\s+que|quem|o\s+que|de\s+que|a\s+que|em\s+que)\s+\S/iu.test(lead)){
+  if(/\?{2,}$/.test(original))return original.replace(/\?{2,}$/,'?');
+  if(!/[.!?…:;]$/.test(original))return original+'?';
+ }
+ return original;
+}
 async function sendChat(){
  const attachedImage=aliviPendingImage;
  const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
- if(!q||busy||!uid||(!attachedImage&&syncing))return;
+ if(!q||!uid)return;
+ if(busy){$('chat-notice').textContent='Ainda estou processando uma mensagem. Seu texto foi mantido.';return;}
  if(!attachedImage&&/^(?:alivi[,!\s]+)?(?:quero|gostaria de|preciso|pode|abra|abrir|vou)?\s*(?:enviar|mandar|registrar|fazer|abrir)?\s*(?:um|uma)?\s*(?:feedback|sugest[aã]o|reclama[cç][aã]o|relat[oa]r? problema)(?:\s+(?:para|à|a)\s+(?:equipe|alivi))?[.!?]?$/iu.test(q)){
   if(voiceModeOn)setVoiceMode(false);
   $('message').value='';go('feedback');await loadFeedbackMine();return;
@@ -656,13 +668,16 @@ async function sendChat(){
  $('send').disabled=true;$('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
  let questionRecorded=false;
  try{
-  if(attachedImage){
+  // A sincronização não pode descartar silenciosamente um pedido de envio.
+  if(syncing){
+   $('chat-notice').textContent='Mensagem recebida. Finalizando a sincronização do histórico...';
    const deadline=Date.now()+15000;
    while(syncing&&g===generation&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,100));
    if(g!==generation)return;
-   if(syncing)throw Error('Sincronização ainda em andamento. Tente novamente.');
-   $('alivi-image-label').textContent=attachedImage.name+' • enviando para análise...';
+   if(syncing)throw Error('Sincronização ainda em andamento. Seu texto foi mantido; toque em Enviar novamente');
+   $('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':'Consultando ALIVI...';
   }
+  if(attachedImage)$('alivi-image-label').textContent=attachedImage.name+' • enviando para análise...';
   const token=await getToken();if(!token)throw Error('Sua sessão expirou. Entre novamente.');
   if(g!==generation)return;
   const project=activeProject;
@@ -677,7 +692,7 @@ async function sendChat(){
    await db('chat_messages','POST','on_conflict=id',{id:user.id,role:user.role,content:q,created_at:user.created_at});
   }catch(e){if(!isReminder)throw e;}
   if(g!==generation)return;
-  $('message').value='';
+  if($('message').value.trim()===q)$('message').value='';
   associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();questionRecorded=true;
   let memoryStatus='',directReply=imageAnswer?.reply||'';
   const fact=(isReminder||attachedImage)?'':memoryFact(q);
@@ -710,7 +725,7 @@ async function sendChat(){
   if(directReply)data={reply:directReply,searched:false};
   else{
    const uniqueMemory=contextualMemories(memory,q,history);
-   const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:q,search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});
+   const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:aliviQuestionForAI(q),search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});
    data=await r.json().catch(()=>({}));
    if(!r.ok||!data.reply){const detail=typeof data.detail==='string'?data.detail:typeof data.message==='string'?data.message:'Serviço de IA temporariamente indisponível';throw Error(detail+' (HTTP '+r.status+').');}
   }
