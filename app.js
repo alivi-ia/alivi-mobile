@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.19',KEY='alivi-mobile-notes-v1';
+const VERSION='3.11.0',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -718,6 +718,12 @@ function aliviNeedsManagement(q){
  const t=agendaNorm(String(q||'').trim().replace(/^alivi[,!:]?\s*/iu,''));
  return /^(?:agende|marque|cadastre|adicione|registre|concluir|conclua|conclui|reagende|remarque|liquide|abasteci|gastei|recebi|produzi|mostre|liste|consulte|exiba|qual e|quais sao)\b/.test(t);
 }
+// 3.11.0 — medição local da última resposta; sem telemetria ou envio de conteúdo.
+function aliviTimingText(start,aiStart,aiEnd,saveStart,end){
+ const fmt=ms=>(Math.max(0,ms)/1000).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+' s';
+ if(aiStart===null||aiEnd===null)return 'Operação local ou imagem: '+fmt(saveStart-start)+'; conclusão: '+fmt(end-saveStart)+'.';
+ return 'Preparação: '+fmt(aiStart-start)+'; servidor de chat: '+fmt(aiEnd-aiStart)+'; conclusão e gravação: '+fmt(end-aiEnd)+'.';
+}
 async function sendChat(){
  const attachedImage=aliviPendingImage;
  const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
@@ -734,6 +740,7 @@ async function sendChat(){
  }
  busy=true;if(voiceModeOn)clearVoiceIdleTimer();
  const started=performance.now();
+ let aiStarted=null,aiEnded=null,saveStarted=null;
  const g=generation;
  const isReminder=!attachedImage&&isReminderIntent(q);
  $('send').disabled=true;$('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
@@ -800,13 +807,16 @@ async function sendChat(){
   else{
    if(memoryJob){const result=await memoryJob;if(g!==generation)return;if(result.error)throw result.error;memory=result.rows;}
    const uniqueMemory=contextualMemories(memory,q,history);
+   aiStarted=performance.now();
    const r=await fetch(getBase()+'/chat',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({message:aliviQuestionForAI(q),search:$('search-web').checked,auto_search:true,history,memory:uniqueMemory.slice(0,30).map(m=>m.memory_value.slice(0,1000))})});
    data=await r.json().catch(()=>({}));
+   aiEnded=performance.now();
    if(!r.ok||!data.reply){const detail=typeof data.detail==='string'?data.detail:typeof data.message==='string'?data.message:'Serviço de IA temporariamente indisponível';throw Error(detail+' (HTTP '+r.status+').');}
   }
   if(g!==generation)return;
   const answer=stamp({role:'assistant',text:data.reply});
   let answerSynced=true;
+  saveStarted=performance.now();
   try{await db('chat_messages','POST','on_conflict=id',{id:answer.id,role:answer.role,content:answer.text,created_at:answer.created_at})}
   catch(e){answerSynced=false;}
   if(g!==generation)return;
@@ -814,7 +824,7 @@ async function sendChat(){
   if(attachedImage&&aliviPendingImage===attachedImage)aliviClearImage();
   $('chat-notice').textContent=answerSynced?(data.searched?'Pesquisa realizada.':'Resposta concluída.'):'Resposta exibida; histórico ainda não sincronizado.';
   const elapsed=((performance.now()-started)/1000).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+' s';
-  $('last-response-time').textContent='Última resposta: '+elapsed+' (envio, processamento e tentativa de salvar o histórico; sem áudio).';
+  $('last-response-time').textContent='Última resposta: '+elapsed+' (sem áudio). '+aliviTimingText(started,aiStarted,aiEnded,saveStarted,performance.now());
   $('chat-notice').textContent+=' • '+elapsed;
   if(voiceModeOn)void say(answer.text,false);
   if(!directReply)suggestPreference(q,memory);
