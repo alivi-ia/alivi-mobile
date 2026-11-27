@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.18',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.19',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -592,7 +592,15 @@ function aliviMemoryRanking(rows,q,history){
   return {m,i,direct,context,score};
  }).sort((a,b)=>Number(b.direct>0)-Number(a.direct>0)||b.score-a.score||a.i-b.i);
 }
-function contextualMemories(rows,q,history){return aliviMemoryRanking(rows,q,history).slice(0,30).map(x=>x.m);}
+function contextualMemories(rows,q,history){
+ const ranked=aliviMemoryRanking(rows,q,history);
+ const broad=/\b(?:lembra|lembre|lembrar|memoria|memorias|recorda|recorde|recordar|sabe sobre mim|me conhece|o que sabe|tudo sobre)\b/.test(agendaNorm(q));
+ const direct=ranked.filter(x=>x.direct>0);
+ if(broad||$('memory-only').checked||direct.length===0)return ranked.slice(0,30).map(x=>x.m);
+ // Envia todos os resultados diretos até o limite anterior, mais até 6 memórias de apoio.
+ const count=Math.min(30,Math.max(12,direct.length+6));
+ return ranked.slice(0,count).map(x=>x.m);
+}
 
 async function showMemories(){const g=generation;const target=$('memory-list');target.textContent='Carregando...';try{const rows=await readMemories(10000);if(g!==generation)return;target.replaceChildren();if(!rows.length)target.textContent='Nenhuma memória salva.';const seen=new Set();for(const row of rows){const item=document.createElement('div');item.className='item';const p=document.createElement('p');p.textContent=row.memory_value;const k=canonical(row.memory_value);if(seen.has(k)){const tag=document.createElement('small');tag.textContent='Possível duplicata de registro anterior';item.append(tag)}seen.add(k);const b=document.createElement('button');b.className='secondary';b.textContent='Excluir memória';b.onclick=async()=>{if(g!==generation||!confirm('Excluir esta memória salva? O histórico de conversa não será apagado.'))return;b.disabled=true;try{await db('user_memory','DELETE',memoryScope()+'&id=eq.'+encodeURIComponent(row.id),undefined,true);if(g!==generation)return;const remaining=await db('user_memory','GET',memoryScope()+'&id=eq.'+encodeURIComponent(row.id)+'&select=id');if(remaining.length)throw Error('Exclusão não confirmada pelo banco');await showMemories()}catch(e){if(g===generation){alert(e.message);b.disabled=false}}};const edit=document.createElement('button');edit.className='secondary';edit.textContent='Editar memória';edit.onclick=async()=>{if(busy||g!==generation)return;busy=true;edit.disabled=b.disabled=true;try{await editMemory(row,g)}catch(e){if(g===generation)alert(e.message)}finally{busy=false;edit.disabled=b.disabled=false}};item.append(p,edit,b);target.append(item)}}catch(e){if(g===generation)target.textContent=e.message}}
 $('show-memory').onclick=showMemories;
@@ -1020,7 +1028,18 @@ $('notice-test').onclick=async()=>{try{await showSystemNotice('ALIVI • Teste',
 async function maybeNotify(rows){if(!uid||noticeBusy||!noticePermission())return;const p=noticePrefs(),hour=new Date().getHours(),account=uid;if(!p.auto||(p.quiet&&(hour>=22||hour<6)))return;const next=rows.filter(r=>p[r.page]&&!p.sent.includes(r.key)&&!p.seen.includes(r.key));if(!next.length)return;noticeBusy=true;try{await showSystemNotice('ALIVI • '+next.length+' aviso(s)',next.length===1?next[0].title+' — '+next[0].detail:'Você tem '+next.length+' avisos para conferir.','alivi-reminders');if(uid===account){const latest=noticePrefs();latest.sent=[...new Set([...latest.sent,...next.map(r=>r.key)])];storeNotice(latest)}}catch(e){if(uid===account)$('notice-status').textContent='Aviso não enviado: '+e.message}finally{noticeBusy=false}}
 $('alerts-refresh').onclick=()=>{renderAlerts();void loadCommunications(true);};$('management-refresh').onclick=syncManagement;
 $('management-export').onclick=()=>{if(!uid)return;const url=URL.createObjectURL(new Blob([JSON.stringify({format:MGKEY,agenda,ledger},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='alivi_gestao_backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)};
-setInterval(()=>{if(uid&&!document.hidden){renderAlerts();syncManagement()}},8000);document.addEventListener('visibilitychange',()=>{if(uid&&!document.hidden){renderAlerts();syncManagement()}});
+// 3.10.19 — preserva alertas a cada 8 s; evita baixar toda a gestão a cada ciclo ocioso.
+let aliviLastIdleManagement=0;
+function aliviManagementPollDue(now,last,hasPending,ready){return hasPending||!ready||now-last>=30000;}
+function aliviPollManagement(force=false){
+ if(!uid||document.hidden)return;
+ renderAlerts();
+ const now=Date.now();
+ if(!mgPromise&&(force||aliviManagementPollDue(now,aliviLastIdleManagement,Object.keys(pending).length>0,mgReady))){aliviLastIdleManagement=now;void syncManagement();}
+}
+setInterval(()=>aliviPollManagement(),8000);
+document.addEventListener('visibilitychange',()=>aliviPollManagement(true));
+window.addEventListener('online',()=>aliviPollManagement(true));
 
 
 function naturalCommand(q){const t=q.trim().replace(/^alivi[,!:]?\s*/iu,'');let m;
