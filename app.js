@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.16',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.17',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -572,8 +572,28 @@ async function readChatMemories(){
 
 async function storeMemory(fact,g){const value=fact.trim();if(!value||value.length>1000)throw Error('Informe uma memória de até 1000 caracteres.');const key='explicit:'+canonical(value);const rows=await readMemories(10000);if(g!==generation)throw Error('Sessão alterada');if(rows.some(r=>canonical(r.memory_value)===canonical(value)||r.memory_key===key))return 'Esta memória já está salva no banco de dados.';await db('user_memory','POST','on_conflict=user_id,memory_key',{memory_key:key,memory_value:value},true);if(g!==generation)throw Error('Sessão alterada');const saved=await db('user_memory','GET',memoryScope()+'&select=id,memory_value&memory_key=eq.'+encodeURIComponent(key));if(!saved.some(r=>canonical(r.memory_value)===canonical(value)))throw Error('Gravação não confirmada pelo banco');return 'Memória salva no banco de dados.'}
 async function editMemory(row,g){const value=prompt('Edite a informação salva. O histórico não será alterado.',row.memory_value);if(value===null||g!==generation)return;const fact=(memoryFact(value)||value).trim();if(!fact||fact.length>1000)throw Error('Informe uma memória de até 1000 caracteres.');const key='explicit:'+canonical(fact);const rows=await readMemories(10000);if(g!==generation)return;if(rows.some(r=>r.id!==row.id&&(canonical(r.memory_value)===canonical(fact)||r.memory_key===key)))throw Error('Já existe outra memória com essa informação.');await db('user_memory','PATCH',memoryScope()+'&id=eq.'+encodeURIComponent(row.id),{memory_key:key,memory_value:fact},true);if(g!==generation)return;const saved=await db('user_memory','GET',memoryScope()+'&id=eq.'+encodeURIComponent(row.id)+'&select=memory_value,memory_key');if(g!==generation)return;if(saved.length!==1||saved[0].memory_value!==fact||saved[0].memory_key!==key)throw Error('Edição não confirmada pelo banco');await showMemories();if(g===generation)$('memory-status').textContent='Memória atualizada no banco de dados.'}
-function memoryWords(text){return new Set(normalizeMemory(text).normalize('NFD').replace(/\p{M}/gu,'').match(/[\p{L}\p{N}]{3,}/gu)?.filter(w=>!['que','com','uma','para','qual','meu','minha','voce','sobre','das','dos','como','este','essa','isso','mais','alivi','memorize','salvas'].includes(w))||[])}
-function contextualMemories(rows,q,history){const terms=memoryWords(q), recent=memoryWords(history.slice(-4).map(m=>m.text).join(' '));const unique=[...new Map([...rows].reverse().map(m=>[canonical(m.memory_value),m])).values()].reverse();return unique.map((m,i)=>{const words=memoryWords(m.memory_value);let score=0;for(const w of words){if(terms.has(w))score+=4;else if(recent.has(w))score++}return {m,i,score}}).sort((a,b)=>b.score-a.score||a.i-b.i).slice(0,30).map(x=>x.m)}
+// 3.10.17 — seleção local de memórias: sem chamadas extras de IA.
+const aliviMemoryStop=new Set('que com uma para qual quais meu minha meus minhas voce sobre das dos como este esta essa esse isso mais alivi memorize salvas salvo quero gostaria pode poderia favor tenho tem tinha sou sao estou esta entre pelo pela por nao sim agora hoje ontem muito tambem fazer feito onde quando quem quanto quantos quantas'.split(' '));
+function memoryWords(text){
+ const tokens=normalizeMemory(text).normalize('NFD').replace(/\p{M}/gu,'').match(/[\p{L}\p{N}]{3,}/gu)||[];
+ return new Set(tokens.filter(w=>!aliviMemoryStop.has(w)));
+}
+function aliviMemoryRanking(rows,q,history){
+ const terms=memoryWords(q), recent=memoryWords(history.filter(m=>m.role==='user').slice(-4).map(m=>m.text).join(' '));
+ const seen=new Set(), unique=[];
+ for(const m of rows){const key=canonical(m.memory_value);if(key&&!seen.has(key)){seen.add(key);unique.push(m);}}
+ const indexed=unique.map((m,i)=>({m,i,words:memoryWords(m.memory_value)}));
+ const df=new Map();for(const {words} of indexed)for(const w of words)if(terms.has(w))df.set(w,(df.get(w)||0)+1);
+ return indexed.map(({m,i,words})=>{
+  let direct=0,context=0,score=0;
+  for(const w of words){if(terms.has(w)){direct++;score+=4+Math.log((1+indexed.length)/(1+(df.get(w)||0)));}else if(recent.has(w)){context++;score+=0.65;}}
+  if(direct>1)score+=2*(direct-1);
+  // A pergunta atual prevalece sobre qualquer contexto recente.
+  return {m,i,direct,context,score};
+ }).sort((a,b)=>Number(b.direct>0)-Number(a.direct>0)||b.score-a.score||a.i-b.i);
+}
+function contextualMemories(rows,q,history){return aliviMemoryRanking(rows,q,history).slice(0,30).map(x=>x.m);}
+
 async function showMemories(){const g=generation;const target=$('memory-list');target.textContent='Carregando...';try{const rows=await readMemories(10000);if(g!==generation)return;target.replaceChildren();if(!rows.length)target.textContent='Nenhuma memória salva.';const seen=new Set();for(const row of rows){const item=document.createElement('div');item.className='item';const p=document.createElement('p');p.textContent=row.memory_value;const k=canonical(row.memory_value);if(seen.has(k)){const tag=document.createElement('small');tag.textContent='Possível duplicata de registro anterior';item.append(tag)}seen.add(k);const b=document.createElement('button');b.className='secondary';b.textContent='Excluir memória';b.onclick=async()=>{if(g!==generation||!confirm('Excluir esta memória salva? O histórico de conversa não será apagado.'))return;b.disabled=true;try{await db('user_memory','DELETE',memoryScope()+'&id=eq.'+encodeURIComponent(row.id),undefined,true);if(g!==generation)return;const remaining=await db('user_memory','GET',memoryScope()+'&id=eq.'+encodeURIComponent(row.id)+'&select=id');if(remaining.length)throw Error('Exclusão não confirmada pelo banco');await showMemories()}catch(e){if(g===generation){alert(e.message);b.disabled=false}}};const edit=document.createElement('button');edit.className='secondary';edit.textContent='Editar memória';edit.onclick=async()=>{if(busy||g!==generation)return;busy=true;edit.disabled=b.disabled=true;try{await editMemory(row,g)}catch(e){if(g===generation)alert(e.message)}finally{busy=false;edit.disabled=b.disabled=false}};item.append(p,edit,b);target.append(item)}}catch(e){if(g===generation)target.textContent=e.message}}
 $('show-memory').onclick=showMemories;
 
