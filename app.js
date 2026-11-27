@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.15',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.16',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -680,6 +680,12 @@ function aliviQuestionForAI(text){
  }
  return original;
 }
+// 3.10.16 — A gestão só é consultada antes de comandos que podem usar seus dados.
+// Prefixos conservadores cobrem todos os interpretadores locais atuais.
+function aliviNeedsManagement(q){
+ const t=agendaNorm(String(q||'').trim().replace(/^alivi[,!:]?\s*/iu,''));
+ return /^(?:agende|marque|cadastre|adicione|registre|concluir|conclua|conclui|reagende|remarque|liquide|abasteci|gastei|recebi|produzi|mostre|liste|consulte|exiba|qual e|quais sao)\b/.test(t);
+}
 async function sendChat(){
  const attachedImage=aliviPendingImage;
  const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
@@ -737,7 +743,7 @@ async function sendChat(){
    if(g!==generation)return;
    directReply=await reminderCommand(q);
    if(!directReply)directReply='Não consegui entender o pedido de lembrete. Diga: “Me avise de beber água daqui a 5 minutos”.';
-  }else if(!fact&&!attachedImage){
+  }else if(!fact&&!attachedImage&&!listMemory&&aliviNeedsManagement(q)){
    await syncManagement();
    if(g!==generation)return;
    directReply=extendedManagement(q)||managementCommand(naturalCommand(q))||agendaCommand(q);
