@@ -1,12 +1,12 @@
 'use strict';
-const VERSION='3.11.0',KEY='alivi-mobile-notes-v1';
+const VERSION='3.11.1',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
 try{notes=JSON.parse(localStorage.getItem(KEY+':'+uid)||'[]');if(!Array.isArray(notes))notes=[]}catch{notes=[]}
 function render(){const target=$('notes');target.replaceChildren();if(!notes.length){const e=document.createElement('div');e.className='empty';e.textContent='Nenhuma nota ainda.';target.append(e)}notes.forEach((n,i)=>{const d=document.createElement('div');d.className='item';const b=document.createElement('b');b.textContent=n.title;const t=document.createElement('p');t.textContent=n.content;const s=document.createElement('small');s.textContent=n.date;const del=document.createElement('button');del.className='secondary';del.textContent='Excluir';del.onclick=()=>{if(confirm('Excluir esta nota?')){notes.splice(i,1);persist()}};d.append(b,t,s,del);target.append(d)})}
 function persist(){localStorage.setItem(KEY+':'+uid,JSON.stringify(notes));render()}
-function go(page){if(page!=='home'&&voiceModeOn)setVoiceMode(false);document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts'){renderAlerts();void loadCommunications(true);}if(page==='feedback')loadFeedbackMine()}
+function go(page){if(page!=='home'&&voiceModeOn)setVoiceMode(false);document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+page));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.go===page));$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false');if(page==='home')scrollLatest();if(page==='projects')renderProjects();if(page==='agenda')renderAgenda();if(page==='finance'||page==='business')renderLedger();if(page==='alerts'){renderAlerts();void loadCommunications(true);}if(page==='feedback')loadFeedbackMine();if(page==='daily'){aliviRenderDaily();void aliviRefreshDaily();}}
 document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
 $('alert-badge').onclick=()=>go('alerts');
 $('dots').onclick=()=>{const m=$('menu');m.hidden=!m.hidden;$('dots').setAttribute('aria-expanded',String(!m.hidden))};document.addEventListener('click',e=>{if(!e.target.closest('.menu-wrap')){$('menu').hidden=true;$('dots').setAttribute('aria-expanded','false')}});
@@ -487,7 +487,7 @@ async function authRequest(path,body,token){const r=await fetch(SB+'/auth/v1/'+p
 function saveSession(d){session=d;localStorage.setItem(SESSION,JSON.stringify(d))}
 async function getToken(){if(!session)return '';if(Number(session.expires_at||0)<Date.now()/1000+90){if(!refreshing)refreshing=(async()=>{const g=generation;try{const d=await authRequest('token?grant_type=refresh_token',{refresh_token:session.refresh_token});if(g!==generation)return '';saveSession(d);return d.access_token}catch(e){if(g===generation&&[400,401,403].includes(e.status))lock();throw e}finally{refreshing=null}})();return refreshing}return session.access_token}
 function readList(key){try{const v=JSON.parse(localStorage.getItem(key)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function lock(){invalidateMemoryCache();$('last-response-time').textContent='Nenhuma medição nesta sessão.';resetCommunications();aliviClearImage();setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviPrivacyReset();aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
+function lock(){$('daily-summary').textContent='';invalidateMemoryCache();$('last-response-time').textContent='Nenhuma medição nesta sessão.';resetCommunications();aliviClearImage();setVoiceMode(false);generation++;noticeFilter='all';$('alerts-list').replaceChildren();$('notice-status').textContent='';$('memory-list').replaceChildren();$('memory-status').textContent='';$('memory-only').checked=false;session=null;uid='';resetManagement();resetAgenda();projects=[];associations=Object.create(null);activeProject='';clearSuggestion();$('suggest-memory').checked=false;localStorage.removeItem(SESSION);notes=[];messages=[];lastReply='';stopAudio();$('message').value='';$('title').value='';$('content').value='';$('feedback-list').replaceChildren();$('feedback-body').value='';aliviPrivacyReset();aliviProfile={userId:'',email:'',name:'',avatar:''};aliviProfileDraftAvatar='';if($('alivi-profile-dialog').open)$('alivi-profile-dialog').close();aliviRenderAccountProfile();$('main-app').hidden=true;$('auth-screen').hidden=false;$('auth-status').textContent='Entre na sua conta.';render();chatRender()}
 async function enter(){const token=await getToken();if(!token)throw Error('Entre na sua conta');const u=await authRequest('user',null,token);if(!u.id||!u.email_confirmed_at)throw Error('Confirme seu e-mail antes de entrar.');invalidateMemoryCache();uid=u.id;aliviPrivacyReset();aliviLoadAccountProfile(u);loadAgenda();loadManagement();loadProjects();notes=readList(KEY+':'+uid);messages=readList(CHATKEY+':'+uid);lastReply=[...visibleMessages()].reverse().find(m=>m.role==='assistant'&&!m.text.startsWith('Não consegui'))?.text||'';$('api-status').textContent='Conectado: '+u.email;$('auth-screen').hidden=true;$('main-app').hidden=false;$('chat-notice').textContent='ALIVI conectada. Pesquisa opcional.';render();chatRender();go('home');void loadCommunications(true);await syncChat(true);syncManagement();renderAlerts();if(new URLSearchParams(location.search).get('page')==='alerts'){go('alerts');history.replaceState(null,'',location.pathname)}}
 async function login(signup){const email=$('email').value.trim(),password=$('password').value;if(!$('auth-form').reportValidity())return;$('login').disabled=$('signup').disabled=true;try{$('auth-status').textContent='Aguarde...';const d=await authRequest(signup?'signup?redirect_to='+encodeURIComponent('https://alivi-ia.github.io/alivi-mobile/'):'token?grant_type=password',{email,password});$('password').value='';if(signup&&!d.access_token){$('auth-status').textContent='Cadastro solicitado. Confirme o e-mail e depois entre com sua senha.';return}saveSession(d);await enter()}catch(e){$('auth-status').textContent=e.message}finally{$('login').disabled=$('signup').disabled=false}}
 $('auth-form').onsubmit=e=>{e.preventDefault();login(false)};$('signup').onclick=()=>login(true);
@@ -724,6 +724,48 @@ function aliviTimingText(start,aiStart,aiEnd,saveStart,end){
  if(aiStart===null||aiEnd===null)return 'Operação local ou imagem: '+fmt(saveStart-start)+'; conclusão: '+fmt(end-saveStart)+'.';
  return 'Preparação: '+fmt(aiStart-start)+'; servidor de chat: '+fmt(aiEnd-aiStart)+'; conclusão e gravação: '+fmt(end-aiEnd)+'.';
 }
+// 3.11.1 — painel diário local, somente leitura. Sem novas chamadas de IA.
+function aliviDailyIntent(q){
+ const t=agendaNorm(String(q||'').replace(/^alivi[,!:]?\s*/iu,'')).replace(/[.!?]+$/,'').trim();
+ return /^(?:organize meu dia|planeje meu dia|resumo do dia|meu resumo do dia|mostre meu dia|mostre meu resumo do dia|quais sao minhas prioridades de hoje|minhas prioridades de hoje|como esta meu dia)$/.test(t);
+}
+function aliviDailySnapshot(tasks, books, today, tomorrow, clock){
+ const byTime=(a,b)=>(a.time||'99:99').localeCompare(b.time||'99:99');
+ const scheduled=tasks.filter(t=>!t.done&&(t.daily?t.date<=today:t.date===today)).sort(byTime);
+ const late=tasks.filter(t=>!t.done&&!t.daily&&t.date<today);
+ const result={scheduled,late,finance:{},priorities:[]};
+ for(const k of ['finance','business']){
+  const rows=books[k]||[];
+  const paid=rows.filter(r=>r.status!=='pending'&&r.date===today);
+  const sum=(a,kind)=>a.filter(r=>r.kind===kind).reduce((n,r)=>n+r.amount,0);
+  const due=rows.filter(r=>r.status==='pending'&&r.date<=tomorrow).sort((a,b)=>a.date.localeCompare(b.date));
+  result.finance[k]={income:sum(paid,'income'),expense:sum(paid,'expense'),due,overdue:due.filter(r=>r.kind==='expense'&&r.date<today),pay:sum(due,'expense'),receive:sum(due,'income')};
+ }
+ if(result.finance.finance.overdue.length||result.finance.business.overdue.length)result.priorities.push('Confira as contas a pagar vencidas.');
+ if(late.length)result.priorities.push('Revise os compromissos de dias anteriores ainda pendentes.');
+ if(scheduled.some(t=>t.time&&t.time<clock&&!t.reminder&&!t.daily))result.priorities.push('Confira os compromissos de hoje cujo horário já passou.');
+ if(scheduled.some(t=>t.time>=clock))result.priorities.push('Prepare-se para os próximos compromissos de hoje.');
+ if(Object.values(result.finance).some(x=>x.due.some(r=>r.kind==='expense'&&r.date>=today)))result.priorities.push('Planeje os pagamentos com vencimento hoje ou amanhã.');
+ if(!result.priorities.length)result.priorities.push('Nenhuma urgência identificada nos registros disponíveis.');
+ return result;
+}
+function aliviDailyText(){
+ const today=localDay(),now=new Date(),clock=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+ const snap=aliviDailySnapshot(agenda,ledger,today,agendaDay(1),clock);
+ const lines=['Seu dia — '+agendaDateLabel(today),'', 'AGENDA DE HOJE'];
+ for(const t of snap.scheduled)lines.push((t.time||'Sem horário')+' — '+t.title+(t.daily?' (diário)':'')+(t.reminder?' (lembrete)':''));
+ if(!snap.scheduled.length)lines.push('Nenhum compromisso pendente registrado para hoje.');
+ if(snap.late.length){lines.push('','PENDÊNCIAS ANTERIORES');for(const t of snap.late)lines.push(agendaDateLabel(t.date)+' — '+t.title);}
+ for(const k of ['finance','business']){
+  const v=snap.finance[k];lines.push('',k==='finance'?'FINANCEIRO PESSOAL':'FINANCEIRO EMPRESARIAL','Receitas liquidadas hoje: '+money(v.income),'Despesas liquidadas hoje: '+money(v.expense),'Resultado dos lançamentos de hoje: '+money(v.income-v.expense),'A pagar até amanhã (inclui atrasos): '+money(v.pay),'A receber até amanhã (inclui atrasos): '+money(v.receive));
+  for(const r of v.due)lines.push((r.kind==='expense'?'Pagar: ':'Receber: ')+r.title+' — '+money(r.amount)+' — '+agendaDateLabel(r.date)+(r.date<today?' (vencida)':''));
+ }
+ lines.push('','PRIORIDADES SUGERIDAS',...snap.priorities.map(x=>'• '+x),'','Base: registros disponíveis nesta conta. Não inclui saldo inicial não lançado. Nenhum registro foi alterado.',$('management-sync').textContent);
+ return lines.join('\n');
+}
+function aliviRenderDaily(){const el=$('daily-summary');if(!el)return;el.textContent=uid?aliviDailyText():'';}
+async function aliviRefreshDaily(){const g=generation,who=uid;if(!who)return;const b=$('daily-refresh');b.disabled=true;try{await syncManagement();if(g===generation&&who===uid)aliviRenderDaily();}finally{b.disabled=false;}}
+
 async function sendChat(){
  const attachedImage=aliviPendingImage;
  const q=$('message').value.trim()||(attachedImage?'Descreva esta imagem em português.':'');
@@ -742,7 +784,8 @@ async function sendChat(){
  const started=performance.now();
  let aiStarted=null,aiEnded=null,saveStarted=null;
  const g=generation;
- const isReminder=!attachedImage&&isReminderIntent(q);
+ const isDaily=!attachedImage&&aliviDailyIntent(q);
+ const isReminder=!attachedImage&&!isDaily&&isReminderIntent(q);
  $('send').disabled=true;$('chat-notice').textContent=attachedImage?'Analisando a imagem com segurança...':isReminder?'Conferindo lembrete e sincronização...':'Consultando ALIVI...';
  let questionRecorded=false;
  try{
@@ -767,7 +810,7 @@ async function sendChat(){
   const listMemory=!isReminder&&!attachedImage&&!fact&&/\b(?:mostre|liste|exiba|consulte|quais)\b[\s\S]*\bmem[oó]rias?\b[\s\S]*\b(?:salvas?|permanentes?)\b/iu.test(q);
   let memory=[];
   // Pré-leitura paralela; a rejeição é tratada mesmo se uma ação local responder.
-  const memoryJob=(!isReminder&&!attachedImage&&!fact&&!listMemory)?readChatMemories().then(rows=>({rows}),error=>({error})):null;
+  const memoryJob=(!isDaily&&!isReminder&&!attachedImage&&!fact&&!listMemory)?readChatMemories().then(rows=>({rows}),error=>({error})):null;
   if(g!==generation)return;
   const user=stamp({role:'user',text:attachedImage?'[Imagem analisada; arquivo não armazenado]\n'+q:q});
   try{
@@ -777,7 +820,11 @@ async function sendChat(){
   if($('message').value.trim()===q)$('message').value='';
   associate(user,project);messages.push(user);maybeTitleNewChat(project,q);chatSave();questionRecorded=true;
   let memoryStatus='',directReply=imageAnswer?.reply||'';
-  if(isReminder){
+  if(isDaily){
+   await syncManagement();
+   if(g!==generation)return;
+   directReply=aliviDailyText();
+  }else if(isReminder){
    await syncManagement();
    if(g!==generation)return;
    directReply=await reminderCommand(q);
@@ -1345,6 +1392,7 @@ setInterval(()=>{if(uid&&!document.hidden)void loadCommunications();},60000);
 document.addEventListener('visibilitychange',()=>{if(uid&&!document.hidden)void loadCommunications();});
 window.addEventListener('online',()=>{if(uid)void loadCommunications(true);});
 
+$('daily-refresh').addEventListener('click',aliviRefreshDaily);
 restore();
 
 
