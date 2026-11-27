@@ -1,5 +1,5 @@
 'use strict';
-const VERSION='3.10.17',KEY='alivi-mobile-notes-v1';
+const VERSION='3.10.18',KEY='alivi-mobile-notes-v1';
 const $=id=>document.getElementById(id);
 let uid="", notes=[];
 let communicationRows=[], communicationRequest=null, communicationLast=0;
@@ -693,13 +693,17 @@ async function aliviAnalyzeImage(img,question,token){
 // histórico, comandos de gestão, memória e anexos conservam o texto original.
 function aliviQuestionForAI(text){
  const original=String(text||'').trim();
- const lead=original.replace(/^(?:(?:oi|olá|ola|ei)\s*[,!]?\s+)?alivi[,!:\s]+/iu,'');
- if(!/[\n\r]/.test(original)&&/^(?:qual|quais|quanto|quanta|quantos|quantas|como|onde|quando|por\s+que|quem|o\s+que|de\s+que|a\s+que|em\s+que)\s+\S/iu.test(lead)){
+ if(/[\n\r]/.test(original))return original;
+ const lead=original.replace(/^(?:(?:oi|olá|ola|ei)\s*[,!]?\s+)?alivi[,!:\s]+/iu,'').trim();
+ const clear=/^(?:qual|quais|quanto|quanta|quantos|quantas|como|onde|quando|por\s+que|quem|o\s+que|de\s+que|a\s+que|em\s+que|ser[aá]\s+que|voc[eê]\s+(?:sabe|consegue|pode|poderia)|(?:pode|poderia)\s+me\s+(?:dizer|explicar|informar|ajudar|contar)|(?:tem|existe)\s+como)\s+\S/iu.test(lead);
+ const follow=/^(?:e\s+)?(?:por\s+qu[eê]|como\s+assim|e\s+agora|e\s+depois)[.!?]*$/iu.test(lead);
+ if(clear||follow){
   if(/\?{2,}$/.test(original))return original.replace(/\?{2,}$/,'?');
   if(!/[.!?…:;]$/.test(original))return original+'?';
  }
  return original;
 }
+
 // 3.10.16 — A gestão só é consultada antes de comandos que podem usar seus dados.
 // Prefixos conservadores cobrem todos os interpretadores locais atuais.
 function aliviNeedsManagement(q){
